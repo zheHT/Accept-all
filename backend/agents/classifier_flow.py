@@ -359,7 +359,7 @@ Respond with the exact JSON matching EmailClassification schema."""
     try:
         live_client = genai.Client(api_key=api_key)
         response = live_client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             contents=user_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
