@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     gmail_oauth_refresh_token: str = ""
     gmail_oauth_redirect_uri: str = "http://localhost:8080/api/integrations/gmail/oauth/callback"
     gmail_address: str = ""
+    gmail_label: str = "INBOX"
 
     primary_model: str = "gemini-3.5-flash"
     fallback_model: str = "gemini-2.5-flash"

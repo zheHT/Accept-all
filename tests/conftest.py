@@ -7,6 +7,7 @@ import pytest
 from backend.core.blob_store import LocalBlobStore
 from backend.core.config import Settings
 from backend.core.explainer import CaseExplainer
+from backend.core.gmail import GmailClient
 from backend.core.inference import ModelRouter
 from backend.core.ingestion import CaseIngestor
 from backend.core.knowledge_publisher import KnowledgePublisher
@@ -39,10 +40,17 @@ class FakeNotifier:
         self.cases.append(case)
 
 
-class FakeGmail:
+class FakeGmail(GmailClient):
     def __init__(self) -> None:
+        super().__init__(
+            client_json='{"web":{"client_id":"x","client_secret":"y","token_uri":"http://token"}}',
+            label="INBOX",
+        )
         self.drafts: dict[str, dict[str, str]] = {}
         self.sent: list[str] = []
+
+    def get_attachment(self, message_id: str, attachment_id: str) -> bytes:
+        return b"fake attachment data"
 
     def create_reply_draft(self, *, to, subject, body, thread_id, message_id_header=""):
         del message_id_header

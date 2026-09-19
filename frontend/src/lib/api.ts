@@ -88,3 +88,65 @@ export async function checkHealth(): Promise<{
   }
   return await response.json();
 }
+
+export interface KnowledgeBaseWeek {
+  week: string;
+  drive_file_id?: string | null;
+  drive_url?: string | null;
+  content_hash: string;
+  source_watermark?: string;
+  published_at: string;
+  status: string;
+  cases_analyzed: number;
+  status_counts: Record<string, number>;
+  category_counts: Record<string, number>;
+  assumptions_count: number;
+  summary_narrative?: string;
+}
+
+export interface AssumptionRecord {
+  assumption_id: string;
+  field: string;
+  normalized_value: string;
+  evidence_count: number;
+  confidence: number;
+  case_links: string[];
+  status: "proposed" | "accepted" | "rejected" | "superseded" | string;
+  last_confirmed_by?: string | null;
+  last_confirmed_date?: string | null;
+  created_at: string;
+}
+
+export async function fetchKnowledgeBaseWeeks(): Promise<KnowledgeBaseWeek[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/knowledge-base/weeks`);
+    if (!response.ok) return [];
+    return await response.json();
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchAssumptionRegistry(status?: string): Promise<AssumptionRecord[]> {
+  try {
+    const url = status
+      ? `${API_BASE_URL}/api/knowledge-base/registry?status=${encodeURIComponent(status)}`
+      : `${API_BASE_URL}/api/knowledge-base/registry`;
+    const response = await fetch(url);
+    if (!response.ok) return [];
+    return await response.json();
+  } catch {
+    return [];
+  }
+}
+
+export async function publishWeeklySnapshot(week?: string): Promise<KnowledgeBaseWeek> {
+  const url = week
+    ? `${API_BASE_URL}/api/knowledge-base/publish?week=${encodeURIComponent(week)}`
+    : `${API_BASE_URL}/api/knowledge-base/publish`;
+  const response = await fetch(url, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`Failed to publish snapshot (${response.status})`);
+  }
+  return await response.json();
+}

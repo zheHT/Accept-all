@@ -1,6 +1,14 @@
 """Unit tests for classifier flow and triage rules."""
+import pytest
+
 from backend.agents.classifier_flow import classify_email
 from backend.models.schemas import EmailCategory
+
+
+@pytest.fixture(autouse=True)
+def deterministic_classifier(monkeypatch):
+    """Ensure unit tests run deterministically via heuristic triage rules without quota exhaustion."""
+    monkeypatch.setattr("backend.agents.classifier_flow.get_client", lambda: None)
 
 
 def test_classify_document_comparison():

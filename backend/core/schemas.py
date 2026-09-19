@@ -198,4 +198,17 @@ class KnowledgeBaseResponse(BaseModel):
     registry: list[AssumptionRecord]
 
 
+class EmailEnvelope(BaseModel):
+    message_id: str
+    thread_id: str
+    sender: str
+    recipients: list[str] = Field(default_factory=list)
+    subject: str = ""
+    plain_text_body: str = ""
+    html_body: str = ""
+    received_at: str | None = None
+    attachments: list[tuple[str, str, bytes]] = Field(default_factory=list)
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 TERMINAL_STATES = {ProcessingState.TERMINAL, ProcessingState.DEAD_LETTER}

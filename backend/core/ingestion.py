@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from backend.core.blob_store import BlobStore
-from backend.core.documents import SUPPORTED_EXTENSIONS
 from backend.core.publisher import TaskPublisher
 from backend.core.repository import CaseRepository
 
@@ -49,8 +48,6 @@ class CaseIngestor:
         validated_attachments: list[tuple[str, str, bytes]] = []
         for filename, content_type, data in attachments:
             filename = safe_filename(filename)
-            if Path(filename).suffix.lower() not in SUPPORTED_EXTENSIONS:
-                raise ValueError(f"unsupported attachment type: {filename}")
             if len(data) > self.max_upload_bytes:
                 raise ValueError(f"attachment exceeds {self.max_upload_bytes} bytes: {filename}")
             validated_attachments.append((filename, content_type, data))

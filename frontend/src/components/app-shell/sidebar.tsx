@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BookOpen,
   FileCheck2,
   Inbox,
   LayoutDashboard,
@@ -45,6 +46,7 @@ export function Sidebar() {
       icon: UserRoundCheck,
       badge: pendingReviews > 0 ? { value: pendingReviews, tone: "review" } : undefined,
     },
+    { label: "Knowledge Base", href: "/knowledge-base", icon: BookOpen },
   ];
 
   return (

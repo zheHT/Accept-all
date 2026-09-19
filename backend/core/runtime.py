@@ -72,6 +72,7 @@ def build_runtime(settings: Settings, *, local_root: Path | None = None) -> Runt
         settings.gmail_oauth_redirect_uri,
         settings.gmail_address,
         refresh_token_provider,
+        label=settings.gmail_label,
     )
     explainer = CaseExplainer(
         settings.google_cloud_project,

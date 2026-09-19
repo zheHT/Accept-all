@@ -2,17 +2,34 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from collections.abc import Callable
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
+from email.utils import getaddresses, parseaddr
 from typing import Any
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
+from backend.core.schemas import EmailEnvelope
+
 GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+
+
+def _decode_b64(value: str | None) -> bytes:
+    if not value:
+        return b""
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _walk_parts(part: dict[str, Any]) -> list[dict[str, Any]]:
+    parts = [part]
+    for child in part.get("parts", []) or []:
+        parts.extend(_walk_parts(child))
+    return parts
 
 
 def _client_config(raw: str) -> dict[str, Any]:
@@ -30,12 +47,14 @@ class GmailClient:
         redirect_uri: str = "",
         address: str = "me",
         refresh_token_provider: Callable[[], str] | None = None,
+        label: str = "INBOX",
     ) -> None:
         self.client_json = client_json
         self.refresh_token = refresh_token
         self.redirect_uri = redirect_uri
         self.address = address or "me"
         self.refresh_token_provider = refresh_token_provider
+        self.label = label or "INBOX"
 
     def authorization_url(self, state: str) -> str:
         flow = Flow.from_client_config(
@@ -83,7 +102,7 @@ class GmailClient:
                 userId=self.address,
                 body={
                     "topicName": topic_name,
-                    "labelIds": ["INBOX"],
+                    "labelIds": [self.label],
                     "labelFilterBehavior": "INCLUDE",
                 },
             )
@@ -99,9 +118,78 @@ class GmailClient:
                 userId=self.address,
                 startHistoryId=start_history_id,
                 historyTypes=["messageAdded"],
-                labelId="INBOX",
+                labelId=self.label,
             )
             .execute()
+        )
+
+    def parse_email_envelope(self, message_data: dict[str, Any]) -> EmailEnvelope:
+        """Parse raw Gmail message payload into canonical EmailEnvelope."""
+        message_id = message_data.get("id", "")
+        thread_id = message_data.get("threadId", "")
+        headers = {
+            item.get("name", "").lower(): item.get("value", "")
+            for item in message_data.get("payload", {}).get("headers", [])
+        }
+
+        sender = parseaddr(headers.get("reply-to") or headers.get("from", ""))[1] or headers.get("from", "")
+        recipients_raw = [headers.get("to", ""), headers.get("cc", "")]
+        recipients = [addr for _, addr in getaddresses([r for r in recipients_raw if r]) if addr]
+
+        subject = headers.get("subject", "")
+        received_at = headers.get("date") or message_data.get("internalDate")
+
+        parts = _walk_parts(message_data.get("payload", {}))
+        plain_text_parts: list[str] = []
+        html_parts: list[str] = []
+        attachments: list[tuple[str, str, bytes]] = []
+
+        for part in parts:
+            mime_type = part.get("mimeType", "")
+            body = part.get("body", {})
+            filename = part.get("filename", "")
+
+            # Plain text body part
+            if not filename and mime_type == "text/plain" and body.get("data"):
+                plain_text_parts.append(_decode_b64(body["data"]).decode("utf-8", errors="replace"))
+            # HTML body part
+            elif not filename and mime_type == "text/html" and body.get("data"):
+                html_parts.append(_decode_b64(body["data"]).decode("utf-8", errors="replace"))
+
+            # Attachment part
+            if filename:
+                att_id = body.get("attachmentId")
+                if att_id:
+                    att_data = self.get_attachment(message_id, att_id)
+                elif body.get("data"):
+                    att_data = _decode_b64(body.get("data"))
+                else:
+                    att_data = b""
+                attachments.append((filename, mime_type, att_data))
+
+        plain_text = "\n".join(plain_text_parts).strip()
+        html_body = "\n".join(html_parts).strip()
+
+        # If plain text is empty but HTML is present, strip HTML tags for plain text fallback
+        if not plain_text and html_body:
+            plain_text = re.sub(r"<[^>]+>", " ", html_body)
+            plain_text = re.sub(r"\s+", " ", plain_text).strip()
+
+        return EmailEnvelope(
+            message_id=message_id,
+            thread_id=thread_id,
+            sender=sender,
+            recipients=recipients,
+            subject=subject,
+            plain_text_body=plain_text,
+            html_body=html_body,
+            received_at=str(received_at) if received_at else None,
+            attachments=attachments,
+            source_metadata={
+                "headers": headers,
+                "label_ids": message_data.get("labelIds", []),
+                "snippet": message_data.get("snippet", ""),
+            },
         )
 
     def get_message(self, message_id: str) -> dict[str, Any]:

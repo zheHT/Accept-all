@@ -78,10 +78,11 @@ export function EmailDrawer({
         description: `${res.category} (${Math.round(res.confidence * 100)}%): ${res.reasoning}`,
         tone: "success",
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to classify email with Gemini backend";
       toast({
         title: "Live Gemini Triage Error",
-        description: err.message || "Failed to classify email with Gemini backend",
+        description: message,
         tone: "warning",
       });
     } finally {
