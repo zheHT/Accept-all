@@ -15,4 +15,5 @@ __pycache__/
 .pytest_cache/
 data
 submission.json
-.env
+.local-blobs/
+test_sub.json
