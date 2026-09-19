@@ -13,7 +13,9 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
-data
+# Generated email corpus and binary document fixtures
+/data/attachments/
+/data/inbox/
 submission.json
 .local-blobs/
 test_sub.json
