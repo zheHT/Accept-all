@@ -110,6 +110,12 @@ def classify_endpoint(payload: EmailInputPayload) -> EmailClassification:
         )
         return result
     except Exception as e:
+        err_str = str(e).lower()
+        if "429" in err_str or "resourceexhausted" in err_str or "rate limit" in err_str or "too many requests" in err_str:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Rate limit exceeded: {str(e)}",
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Classification error: {str(e)}",

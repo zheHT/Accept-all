@@ -369,7 +369,16 @@ Respond with the exact JSON matching EmailClassification schema."""
             ),
         )
 
-        result_text = response.text
+        result_text = (response.text or "").strip()
+        # Clean markdown code fences if present (e.g., ```json ... ```)
+        if result_text.startswith("```"):
+            lines = result_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            result_text = "\n".join(lines).strip()
+
         classification = EmailClassification.model_validate_json(result_text)
 
         # Ensure detected_attachments includes input attachments if LLM left it empty
