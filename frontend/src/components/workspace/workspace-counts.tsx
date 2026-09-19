@@ -1,19 +1,54 @@
 "use client";
 
-import { createContext, useContext } from "react";
-import { getDashboard, type CaseSummary } from "@/lib/api";
+import { createContext, useContext, useMemo } from "react";
+import { getDashboard } from "@/lib/api";
 import { useLiveQuery } from "@/lib/use-live-query";
 
 interface WorkspaceCountsValue {
-  processing: number;
+  unreadEmails: number;
   pendingReviews: number;
-  attentionItems: CaseSummary[];
-  refresh: () => Promise<void>;
+  /** Opening an email marks it read and drops the Inbox badge. */
+  markEmailRead: (id: string) => void;
+  /** Opening a review case takes it out of the Review Queue badge. */
+  markReviewOpened: (id: string) => void;
+  isEmailRead: (id: string) => boolean;
+  isReviewOpened: (id: string) => boolean;
 }
-const WorkspaceCountsContext = createContext<WorkspaceCountsValue>({ processing: 0, pendingReviews: 0, attentionItems: [], refresh: async () => {} });
-export function useWorkspaceCounts() { return useContext(WorkspaceCountsContext) }
+
+const WorkspaceCountsContext = createContext<WorkspaceCountsValue>({
+  unreadEmails: 0,
+  pendingReviews: 0,
+  markEmailRead: () => {},
+  markReviewOpened: () => {},
+  isEmailRead: () => true,
+  isReviewOpened: () => false,
+});
+
+export function useWorkspaceCounts() {
+  return useContext(WorkspaceCountsContext);
+}
+
+/**
+ * Live shell counters. The Inbox badge represents cases still processing and the
+ * Review badge represents unresolved review work. Opening a row does not create
+ * a fake per-browser read state.
+ */
 export function WorkspaceCountsProvider({ children }: { children: React.ReactNode }) {
-  const query = useLiveQuery((signal) => getDashboard("week", signal), []);
-  const value = { processing: query.data?.metrics.processing ?? 0, pendingReviews: query.data?.metrics.unresolved ?? 0, attentionItems: query.data?.attention_items ?? [], refresh: query.refresh };
-  return <WorkspaceCountsContext.Provider value={value}>{children}</WorkspaceCountsContext.Provider>;
+  const dashboard = useLiveQuery((signal) => getDashboard("week", signal), []);
+
+  const value = useMemo<WorkspaceCountsValue>(
+    () => ({
+      unreadEmails: dashboard.data?.metrics.processing ?? 0,
+      pendingReviews: dashboard.data?.metrics.unresolved ?? 0,
+      markEmailRead: () => {},
+      markReviewOpened: () => {},
+      isEmailRead: () => true,
+      isReviewOpened: () => false,
+    }),
+    [dashboard.data],
+  );
+
+  return (
+    <WorkspaceCountsContext.Provider value={value}>{children}</WorkspaceCountsContext.Provider>
+  );
 }

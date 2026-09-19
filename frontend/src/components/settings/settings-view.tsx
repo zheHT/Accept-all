@@ -1,49 +1,306 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ExternalLink, Lock, Mail, ShieldCheck } from "lucide-react";
-import { getSettings, saveSettings, startGmailOAuth } from "@/lib/api";
-import { useLiveQuery } from "@/lib/use-live-query";
+import { Bell, ExternalLink, Mail, Moon, Palette, ScanLine, ShieldCheck, Sun } from "lucide-react";
+import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
+import { useTheme, type ThemeChoice } from "@/components/theme/theme-provider";
 import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
+import { getSettings, saveSettings, startGmailOAuth } from "@/lib/api";
+import { formatDate } from "@/lib/format";
+import { useLiveQuery } from "@/lib/use-live-query";
+
+const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; icon: typeof Sun }> = [
+  { value: "light", label: "Light", icon: Sun },
+  { value: "dark", label: "Dark", icon: Moon },
+];
+
+const THRESHOLDS = ["75", "80", "85", "90", "95"];
 
 export function SettingsView() {
   const toast = useToast();
-  const query = useLiveQuery((signal) => getSettings(signal), []);
-  const [threshold, setThreshold] = useState(0.85);
-  const [alerts, setAlerts] = useState(true);
+  const { theme, mounted, setTheme } = useTheme();
+  const settings = useLiveQuery((signal) => getSettings(signal), []);
+
+  const [threshold, setThreshold] = useState("85");
+  const [mismatchAlerts, setMismatchAlerts] = useState(true);
   const [saving, setSaving] = useState(false);
-  useEffect(() => { if (query.data) { setThreshold(query.data.confidence_threshold); setAlerts(query.data.mismatch_alerts_enabled) } }, [query.data]);
 
-  if (query.loading && !query.data) return <LoadingState label="Loading operational settings" />;
-  if (query.error && !query.data) return <ErrorState message={query.error} retry={() => void query.refresh()} />;
-  if (!query.data) return null;
+  useEffect(() => {
+    if (!settings.data) return;
+    setThreshold(String(Math.round(settings.data.confidence_threshold * 100)));
+    setMismatchAlerts(settings.data.mismatch_alerts_enabled);
+  }, [settings.data]);
 
-  const save = async () => {
+  if (settings.loading && !settings.data) return <LoadingState label="Loading operational settings" />;
+  if (settings.error && !settings.data) {
+    return <ErrorState message={settings.error} retry={() => void settings.refresh()} />;
+  }
+
+  const persist = async (nextThreshold: string, nextAlerts: boolean) => {
     setSaving(true);
-    try { await saveSettings({ confidence_threshold: threshold, mismatch_alerts_enabled: alerts }); await query.refresh(); toast({ title: "Operational settings saved", tone: "success" }) }
-    catch { toast({ title: "Settings could not be saved", tone: "warning" }) }
-    finally { setSaving(false) }
+    try {
+      await saveSettings({
+        confidence_threshold: Number(nextThreshold) / 100,
+        mismatch_alerts_enabled: nextAlerts,
+      });
+      await settings.refresh();
+      toast({ title: "Operational settings saved", tone: "success" });
+    } catch (error) {
+      toast({
+        title: "Settings were not saved",
+        description: error instanceof Error ? error.message : "Please retry.",
+        tone: "warning",
+      });
+    } finally {
+      setSaving(false);
+    }
   };
+
   return (
-    <div className="space-y-5">
-      {query.stale && <StaleNotice />}
-      <Panel icon={ShieldCheck} title="Verification policy" detail="Two supported controls are persisted in platform_settings/current.">
-        <Row title="Confidence threshold" detail="Any extracted field below this value always enters review."><select className="field-glass w-auto" value={threshold} onChange={(event) => setThreshold(Number(event.target.value))}>{[0.75, 0.8, 0.85, 0.9, 0.95].map((value) => <option key={value} value={value}>{Math.round(value * 100)}%</option>)}</select></Row>
-        <Row title="Telegram mismatch alerts" detail="Dashboard review cases remain available when alerts are disabled."><Switch checked={alerts} onChange={setAlerts} label="Telegram mismatch alerts" /></Row>
-        {["Low-confidence fields require review", "Missing values require review", "Unreadable documents require review"].map((label) => <Row key={label} title={label} detail="This safety rule is fixed and cannot be bypassed."><span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-ink-500"><Lock className="size-3.5" />Always on</span></Row>)}
-        <div className="flex justify-end px-5 py-4"><button type="button" disabled={saving} className="btn-primary active:scale-95" onClick={() => void save()}>{saving ? "Saving…" : "Save policy"}</button></div>
+    <div className="flex flex-col gap-5">
+      {settings.stale && <StaleNotice />}
+      <Panel
+        icon={Palette}
+        title="Appearance"
+        description="Choose how ShipVerify looks on this device."
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
+          <div>
+            <p className="text-[13.5px] font-medium text-ink-900">Theme</p>
+            <p className="mt-1 text-[12px] text-ink-400" suppressHydrationWarning>
+              {mounted ? `Currently showing ${theme} mode.` : "Reading your saved preference…"}
+            </p>
+          </div>
+
+          <div
+            role="radiogroup"
+            aria-label="Theme"
+            className="flex shrink-0 gap-1 rounded-xl border border-line-strong bg-canvas p-1"
+          >
+            {THEME_OPTIONS.map((option) => {
+              const Icon = option.icon;
+              const active = mounted && theme === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => {
+                    setTheme(option.value);
+                    toast({
+                      title: `${option.label} theme applied`,
+                      description: `Interface switched to ${option.label.toLowerCase()} mode on this device.`,
+                      tone: "success",
+                    });
+                  }}
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-[12.5px] font-medium transition-all",
+                    active
+                      ? "bg-gradient-to-b from-brand-500 to-brand-700 text-white shadow-glass"
+                      : "text-ink-500 hover:bg-surface hover:text-ink-900",
+                  )}
+                >
+                  <Icon className="size-4" strokeWidth={2.25} />
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </Panel>
-      <Panel icon={Mail} title="Gmail connection" detail="OAuth and watch state from the production ingestion pipeline.">
-        <Row title={query.data.gmail.address || "Mailbox not configured"} detail={`Connection: ${query.data.gmail.oauth_status.replaceAll("_", " ")} · History cursor ${query.data.gmail.history_id_present ? "ready" : "not ready"}`}><button type="button" className="btn-glass active:scale-95" onClick={() => void startGmailOAuth().then(({ authorization_url }) => { window.location.assign(authorization_url) })}><ExternalLink className="size-4" />{query.data.gmail.oauth_status === "connected" ? "Reconnect" : "Connect Gmail"}</button></Row>
-        {query.data.gmail.watch_expiration && <Row title="Watch expiration" detail={new Date(query.data.gmail.watch_expiration).toLocaleString("en-MY")}><span className="text-[12px] font-medium text-matched-700">Scheduled renewal</span></Row>}
+
+      <Panel
+        icon={ShieldCheck}
+        title="Verification rules"
+        description="How certain the engine must be before it decides a field on its own."
+      >
+        <Row
+          title="Confidence threshold"
+          detail="Below this, a field is sent to Human Review instead of being decided automatically."
+        >
+          <select
+            value={threshold}
+            onChange={(event) => {
+              const next = event.target.value;
+              setThreshold(next);
+              void persist(next, mismatchAlerts);
+            }}
+            disabled={saving}
+            className="field-glass tabular w-auto cursor-pointer px-3 py-2 font-medium"
+          >
+            {THRESHOLDS.map((value) => (
+              <option key={value} value={value}>
+                {value}%
+              </option>
+            ))}
+          </select>
+        </Row>
+
+        <Row
+          title="Low-confidence values require Human Review"
+          detail="Fixed safety policy: uncertain extractions always go to a person."
+        >
+          <Switch
+            label="Low-confidence values require Human Review"
+            checked
+            disabled
+            onChange={() => {}}
+          />
+        </Row>
+
+        <Row
+          title="Missing and unreadable values require review"
+          detail="Fixed safety policy: missing or unreadable values can never be auto-approved."
+          icon={ScanLine}
+        >
+          <Switch
+            label="Missing and unreadable values require review"
+            checked
+            disabled
+            onChange={() => {}}
+          />
+        </Row>
+      </Panel>
+
+      <Panel
+        icon={Mail}
+        title="Mailbox connection"
+        description="The inbox ShipVerify watches for shipping documents."
+      >
+        <Row
+          title={settings.data?.gmail.address || "Gmail account"}
+          detail={`OAuth: ${settings.data?.gmail.oauth_status || "not connected"} · Watch: ${settings.data?.gmail.watch_expiration ? formatDate(settings.data.gmail.watch_expiration) : "not active"}`}
+        >
+          <button
+            type="button"
+            className="btn-glass"
+            onClick={() => void startGmailOAuth().then(({ authorization_url }) => window.location.assign(authorization_url)).catch((error: unknown) => toast({ title: "Could not start Gmail connection", description: error instanceof Error ? error.message : "Please retry.", tone: "warning" }))}
+          >
+            <ExternalLink className="size-4" />
+            {settings.data?.gmail.oauth_status === "connected" ? "Reconnect" : "Connect Gmail"}
+          </button>
+        </Row>
+      </Panel>
+
+      <Panel icon={Bell} title="Notifications" description="What reaches you, and when.">
+        <Row
+          title="Mismatch alerts"
+          detail="Notify immediately when a discrepancy is found on any shipment."
+        >
+          <Switch
+            label="Mismatch alerts"
+            checked={mismatchAlerts}
+            onChange={(next) => {
+              setMismatchAlerts(next);
+              void persist(threshold, next);
+            }}
+            disabled={saving}
+          />
+        </Row>
       </Panel>
     </div>
   );
 }
 
-function Panel({ icon: Icon, title, detail, children }: { icon: typeof ShieldCheck; title: string; detail: string; children: React.ReactNode }) {
-  return <section className="glass glass-sheen overflow-hidden"><header className="flex items-start gap-3 border-b border-line px-5 py-4"><span className="grid size-9 place-items-center rounded-xl bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200"><Icon className="size-4" /></span><div><h2 className="text-[15px] font-semibold text-ink-900">{title}</h2><p className="mt-1 text-[12px] text-ink-500">{detail}</p></div></header><div className="divide-y divide-line">{children}</div></section>;
+function Panel({
+  icon: Icon,
+  title,
+  description,
+  children,
+}: {
+  icon: typeof Palette;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="glass glass-sheen overflow-hidden">
+      <header className="flex items-start gap-3 border-b border-line px-5 py-4">
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200">
+          <Icon className="size-[17px]" strokeWidth={2} />
+        </span>
+        <div>
+          <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">{title}</h2>
+          <p className="mt-1 text-[12.5px] text-ink-500">{description}</p>
+        </div>
+      </header>
+      <div className="divide-y divide-line">{children}</div>
+    </section>
+  );
 }
-function Row({ title, detail, children }: { title: string; detail: string; children: React.ReactNode }) { return <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4"><div><p className="text-[13px] font-medium text-ink-900">{title}</p><p className="mt-1 text-[12px] text-ink-400">{detail}</p></div><div>{children}</div></div> }
-function Switch({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) { return <button type="button" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} className={`relative h-6 w-11 rounded-full active:scale-95 ${checked ? "bg-brand-600" : "bg-canvas ring-1 ring-inset ring-line"}`}><span className={`absolute top-1 size-4 rounded-full bg-white shadow transition-transform ${checked ? "left-1 translate-x-5" : "left-1"}`} /></button> }
+
+function Row({
+  title,
+  detail,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  detail: string;
+  icon?: typeof Palette;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
+      <div className="flex min-w-0 items-start gap-2.5">
+        {Icon && <Icon className="mt-0.5 size-4 shrink-0 text-ink-400" strokeWidth={2} />}
+        <div className="min-w-0">
+          <p className="text-[13.5px] font-medium text-ink-900">{title}</p>
+          <p className="mt-1 text-[12px] leading-relaxed text-ink-400">{detail}</p>
+        </div>
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+function Switch({
+  label,
+  checked,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <span className="inline-flex items-center gap-2.5">
+      <span
+        className={cn(
+          "tabular w-6 text-[11px] font-semibold uppercase tracking-[0.08em]",
+          checked ? "text-brand-600" : "text-ink-400",
+        )}
+        aria-hidden
+      >
+        {checked ? "On" : "Off"}
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={cn(
+          "relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-60",
+          checked
+            ? "bg-gradient-to-r from-brand-500 to-brand-700"
+            : "bg-canvas ring-1 ring-inset ring-line-strong",
+        )}
+      >
+        <span
+          className={cn(
+            "inline-block size-4 rounded-full shadow-glass transition-transform duration-200",
+            checked
+              ? "translate-x-6 bg-white"
+              : "translate-x-1 bg-surface ring-1 ring-inset ring-line-strong",
+          )}
+        />
+      </button>
+    </span>
+  );
+}

@@ -14,6 +14,8 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.venv/
+scripts/seed_demo_cases.py
 # Generated email corpus, binary document fixtures, and evaluation data
 /data/attachments/
 /data/inbox/
