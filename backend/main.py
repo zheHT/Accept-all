@@ -25,10 +25,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "*",
+]
+
 # Setup CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -60,6 +68,13 @@ def health():
     status_code=status.HTTP_200_OK,
     tags=["Classification"],
     summary="Classify and triage an incoming shipping email",
+)
+@app.post(
+    "/api/process",
+    response_model=EmailClassification,
+    status_code=status.HTTP_200_OK,
+    tags=["Classification"],
+    summary="Alias to classify and triage an incoming shipping email",
 )
 def classify_endpoint(payload: EmailInputPayload) -> EmailClassification:
     """Classify incoming email payload into one of 5 operational categories:

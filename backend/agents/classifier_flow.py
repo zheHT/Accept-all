@@ -342,49 +342,55 @@ Attached Document Previews:
 
 Respond with the exact JSON matching EmailClassification schema."""
 
-    # Try LLM classification if GenAI client is available
-    ai_client = get_client()
-    if ai_client is not None:
-        try:
-            response = ai_client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    temperature=0.0,
-                    response_mime_type="application/json",
-                    response_schema=EmailClassification,
-                ),
-            )
+    # FORCE LIVE GEMINI 1.5 FLASH CALL (Fallback disabled per Task 3)
+    load_dotenv(override=True)
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        err_msg = (
+            "GEMINI_API_KEY is not set in environment or .env file! "
+            "Offline heuristic fallback is currently disabled to test real Gemini API calls. "
+            "Please add GEMINI_API_KEY to your .env file or environment."
+        )
+        logger.error(err_msg)
+        raise RuntimeError(err_msg)
 
-            result_text = response.text
-            classification = EmailClassification.model_validate_json(result_text)
+    import traceback
 
-            # Ensure detected_attachments includes input attachments if LLM left it empty
-            if not classification.detected_attachments and detected_att_names:
-                classification.detected_attachments = detected_att_names
+    try:
+        live_client = genai.Client(api_key=api_key)
+        response = live_client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                temperature=0.0,
+                response_mime_type="application/json",
+                response_schema=EmailClassification,
+            ),
+        )
 
-            # Enforce strict candidate rule: strictly True for DOCUMENT_COMPARISON
-            classification.is_comparison_candidate = (
-                classification.category == EmailCategory.DOCUMENT_COMPARISON
-            )
+        result_text = response.text
+        classification = EmailClassification.model_validate_json(result_text)
 
-            # Post-processing guardrail: check missing/unreadable attachments
-            if classification.category == EmailCategory.DOCUMENT_COMPARISON:
-                if _check_missing_attachments(classification.category, att_dict):
-                    classification.missing_attachments_flag = True
+        # Ensure detected_attachments includes input attachments if LLM left it empty
+        if not classification.detected_attachments and detected_att_names:
+            classification.detected_attachments = detected_att_names
 
-            return classification
+        # Enforce strict candidate rule: strictly True for DOCUMENT_COMPARISON
+        classification.is_comparison_candidate = (
+            classification.category == EmailCategory.DOCUMENT_COMPARISON
+        )
 
-        except Exception as e:
-            logger.warning(f"GenAI API call failed for {email_id}: {e}. Engaging fallback classifier.")
+        # Post-processing guardrail: check missing/unreadable attachments
+        if classification.category == EmailCategory.DOCUMENT_COMPARISON:
+            if _check_missing_attachments(classification.category, att_dict):
+                classification.missing_attachments_flag = True
 
-    # Fallback heuristic classifier
-    classification = _classify_with_heuristics(
-        email_id=email_id,
-        subject=subject,
-        sender=sender,
-        body=body,
-        attachment_previews=att_dict,
-    )
-    return classification
+        return classification
+
+    except Exception as e:
+        stack_trace = traceback.format_exc()
+        logger.error(f"Live Gemini API call failed for email {email_id}:\n{stack_trace}")
+        print(f"\n[ERROR] Live Gemini API call failed for {email_id}: {e}\n{stack_trace}")
+        raise
+

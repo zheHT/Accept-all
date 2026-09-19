@@ -4,7 +4,7 @@
   "private": true,
   "description": "ShipVerify — enterprise dashboard UI for shipping document verification (SI vs BL).",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 5173",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

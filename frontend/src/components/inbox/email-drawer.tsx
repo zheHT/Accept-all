@@ -20,9 +20,11 @@ import { documentBodyForCase, pendingDocumentBody } from "@/lib/document-text";
 import { ClassificationBadge, EmailStatusBadge } from "./badges";
 import {
   CLASSIFICATION_META,
+  type EmailClassification,
   type InboxEmail,
   type MailAttachment,
 } from "@/lib/inbox-data";
+import { classifyEmail, mapBackendCategory } from "@/lib/api";
 
 /**
  * Email detail view.
@@ -41,6 +43,51 @@ export function EmailDrawer({
   const router = useRouter();
   const toast = useToast();
   const [preview, setPreview] = useState<PreviewDocument | null>(null);
+  const [liveResult, setLiveResult] = useState<{
+    classification: EmailClassification;
+    confidence: number;
+    reasoning: string;
+  } | null>(null);
+  const [isClassifying, setIsClassifying] = useState(false);
+
+  // Reset liveResult whenever a different email is opened
+  useEffect(() => {
+    setLiveResult(null);
+  }, [email?.id]);
+
+  const handleRunLiveClassifier = async () => {
+    if (!email) return;
+    setIsClassifying(true);
+    try {
+      const payload = {
+        email_id: email.id,
+        subject: email.subject,
+        body: email.body.join("\n"),
+        sender: email.senderEmail || email.sender,
+        attachments: email.attachments.map((a) => a.name),
+      };
+      const res = await classifyEmail(payload);
+      const mapped = mapBackendCategory(res.category);
+      setLiveResult({
+        classification: mapped,
+        confidence: res.confidence,
+        reasoning: res.reasoning,
+      });
+      toast({
+        title: "Live Gemini 1.5 Triage Success",
+        description: `${res.category} (${Math.round(res.confidence * 100)}%): ${res.reasoning}`,
+        tone: "success",
+      });
+    } catch (err: any) {
+      toast({
+        title: "Live Gemini Triage Error",
+        description: err.message || "Failed to classify email with Gemini backend",
+        tone: "warning",
+      });
+    } finally {
+      setIsClassifying(false);
+    }
+  };
 
   useEffect(() => {
     if (!email) return;
@@ -94,7 +141,10 @@ export function EmailDrawer({
 
   if (!email) return null;
 
-  const meta = CLASSIFICATION_META[email.classification];
+  const currentClassification = liveResult?.classification ?? email.classification;
+  const currentConfidence = liveResult?.confidence ?? email.confidence;
+  const currentReasoning = liveResult?.reasoning ?? email.classificationNote;
+  const meta = CLASSIFICATION_META[currentClassification];
   const si = email.attachments.find((file) => file.role === "SI");
   const bl = email.attachments.find((file) => file.role === "BL");
 
@@ -131,7 +181,7 @@ export function EmailDrawer({
         <header className="flex items-start gap-4 border-b border-line px-6 py-5">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <ClassificationBadge classification={email.classification} />
+              <ClassificationBadge classification={currentClassification} />
               <EmailStatusBadge status={email.status} />
             </div>
             <h2 className="mt-3 text-[18px] font-semibold leading-snug tracking-tight text-ink-900">
@@ -171,33 +221,49 @@ export function EmailDrawer({
           </dl>
 
           <section className="mt-5 rounded-xl border border-edge bg-surface/60 p-4">
-            <div className="flex items-center gap-2">
-              <Sparkles className="size-3.5 text-brand-600" strokeWidth={2.25} />
-              <p className="eyebrow">AI classification</p>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Sparkles className="size-3.5 text-brand-600" strokeWidth={2.25} />
+                <p className="eyebrow">AI classification</p>
+              </div>
+              <button
+                type="button"
+                disabled={isClassifying}
+                onClick={handleRunLiveClassifier}
+                className="btn-glass flex items-center gap-1.5 px-2.5 py-1 text-[11.5px] font-medium text-brand-700 hover:border-brand-300 disabled:opacity-50"
+              >
+                <Sparkles className={cn("size-3", isClassifying && "animate-spin text-brand-500")} />
+                {isClassifying ? "Triaging with Gemini..." : "Re-classify with Gemini 1.5"}
+              </button>
             </div>
             <div className="mt-3 flex items-center gap-3">
               <span className="text-[14px] font-semibold text-ink-900">{meta.label}</span>
+              {liveResult && (
+                <span className="rounded-md bg-matched-50 px-1.5 py-0.5 text-[10.5px] font-medium text-matched-700 ring-1 ring-inset ring-matched-200">
+                  Live Response
+                </span>
+              )}
             </div>
             <div className="mt-3 flex items-center gap-3">
               <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface ring-1 ring-inset ring-line">
                 <span
                   className={cn(
                     "block h-full rounded-full bg-gradient-to-r",
-                    email.confidence >= 0.85
+                    currentConfidence >= 0.85
                       ? "from-matched-500 to-matched-700"
-                      : email.confidence >= 0.7
+                      : currentConfidence >= 0.7
                         ? "from-brand-400 to-brand-600"
                         : "from-review-500 to-review-700",
                   )}
-                  style={{ width: `${Math.round(email.confidence * 100)}%` }}
+                  style={{ width: `${Math.round(currentConfidence * 100)}%` }}
                 />
               </span>
               <span className="tabular text-[12px] font-semibold text-ink-700">
-                {Math.round(email.confidence * 100)}% confidence
+                {Math.round(currentConfidence * 100)}% confidence
               </span>
             </div>
             <p className="mt-3 text-[12.5px] leading-relaxed text-ink-500">
-              {email.classificationNote}
+              {currentReasoning}
             </p>
           </section>
 
