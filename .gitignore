@@ -1,0 +1,11 @@
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo
+node_modules/
+.next/
+.preview/
+*.tsbuildinfo
+.env
+.env.local
