@@ -1,6 +1,6 @@
 from io import BytesIO
 from pathlib import Path
-from zipfile import is_zipfile
+from zipfile import BadZipFile, ZipFile
 
 from markitdown import MarkItDown, StreamInfo
 from pypdf import PdfReader
@@ -52,10 +52,7 @@ def _decode_text(data: bytes) -> str:
 
 
 def _convert_office(data: bytes, filename: str, extension: str) -> str:
-    if not is_zipfile(BytesIO(data)):
-        raise UnreadableDocumentError(
-            f"Unable to read {extension[1:].upper()} document."
-        )
+    _validate_office_package(data, extension)
 
     try:
         result = MarkItDown(enable_plugins=False).convert_stream(
@@ -71,6 +68,28 @@ def _convert_office(data: bytes, filename: str, extension: str) -> str:
     if not text:
         raise UnreadableDocumentError(f"Empty {extension[1:].upper()} document.")
     return text
+
+
+def _validate_office_package(data: bytes, extension: str) -> None:
+    required_parts = {
+        "[Content_Types].xml",
+        {
+            ".docx": "word/document.xml",
+            ".xlsx": "xl/workbook.xml",
+        }[extension],
+    }
+    try:
+        with ZipFile(BytesIO(data)) as archive:
+            package_parts = set(archive.namelist())
+    except (BadZipFile, OSError, ValueError) as exc:
+        raise UnreadableDocumentError(
+            f"Unable to read {extension[1:].upper()} document."
+        ) from exc
+
+    if not required_parts.issubset(package_parts):
+        raise UnreadableDocumentError(
+            f"Unable to read {extension[1:].upper()} document."
+        )
 
 
 def _validate_pdf(data: bytes) -> None:
@@ -106,5 +125,11 @@ def _normalized_title(text: str) -> str:
     for line in text.splitlines():
         title = line.strip()
         if title:
-            return " ".join(title.lstrip("#").strip().upper().split())
+            normalized = " ".join(title.lstrip("#").strip().upper().split())
+            if normalized == "SHEET":
+                continue
+            if title.startswith("|"):
+                first_cell = title.strip("|").split("|", maxsplit=1)[0].strip()
+                normalized = " ".join(first_cell.upper().split())
+            return normalized
     return ""

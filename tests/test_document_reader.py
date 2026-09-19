@@ -1,4 +1,5 @@
 from io import BytesIO
+from zipfile import ZipFile
 
 import pytest
 from docx import Document
@@ -55,6 +56,13 @@ def xlsx_bytes() -> bytes:
         label, value = line.split(": ", maxsplit=1)
         sheet.append([label, value])
     workbook.save(stream)
+    return stream.getvalue()
+
+
+def non_office_zip_bytes() -> bytes:
+    stream = BytesIO()
+    with ZipFile(stream, "w") as archive:
+        archive.writestr("note.txt", "This is not an Office document.")
     return stream.getvalue()
 
 
@@ -125,6 +133,27 @@ def test_office_documents_are_converted_to_markdown_with_shipping_fields(
 def test_corrupt_office_document_is_unreadable(filename):
     with pytest.raises(UnreadableDocumentError):
         prepare_document(DocumentInput(filename, b"not an Office container"))
+
+
+@pytest.mark.parametrize("filename", ["note.docx", "note.xlsx"])
+def test_non_office_zip_is_unreadable(filename):
+    with pytest.raises(UnreadableDocumentError):
+        prepare_document(DocumentInput(filename, non_office_zip_bytes()))
+
+
+@pytest.mark.parametrize(
+    ("filename", "document_bytes", "expected"),
+    [
+        ("draft_bl.docx", docx_bytes, DocumentKind.BL),
+        ("shipping_instruction.xlsx", xlsx_bytes, DocumentKind.SI),
+    ],
+)
+def test_converted_office_document_kind_uses_leading_title(
+    filename, document_bytes, expected
+):
+    prepared = prepare_document(DocumentInput(filename, document_bytes()))
+
+    assert detect_document_kind(prepared) == expected
 
 
 def test_wrong_document_title_is_detected():
