@@ -1,0 +1,151 @@
+version: "1.0"
+agent:
+  name: "email_classifier_triage_agent"
+  description: "Automated triage pipeline for maritime shipping customer service inbox, routing correspondence into operational categories and flagging BL vs SI comparison candidates."
+
+input_contract:
+  type: "object"
+  required:
+    - "email_id"
+    - "subject"
+    - "body"
+  properties:
+    email_id:
+      type: "string"
+      description: "Unique identifier for the incoming correspondence (e.g., email_001)."
+    sender:
+      type: "string"
+      description: "Sender email address or party display name."
+      default: ""
+    subject:
+      type: "string"
+      description: "Email subject line (note: body intent always overrides deceptive subjects)."
+    body:
+      type: "string"
+      description: "Full text content of the email message."
+    attachments:
+      type: "array"
+      items:
+        type: "string"
+      description: "List of attached file paths or filenames (e.g., draft BL, SI documents)."
+      default: []
+
+output_contract:
+  type: "object"
+  required:
+    - "category"
+    - "confidence"
+    - "reasoning"
+    - "is_comparison_candidate"
+    - "missing_attachments_flag"
+    - "detected_attachments"
+  properties:
+    category:
+      type: "string"
+      enum:
+        - "DOCUMENT_COMPARISON"
+        - "NEW_SI_REQUEST"
+        - "INVOICE_QUERY"
+        - "GENERAL"
+        - "SPAM"
+      description: "Triage category assigned to the email."
+    confidence:
+      type: "number"
+      minimum: 0.0
+      maximum: 1.0
+      description: "Model confidence score for the classification decision."
+    reasoning:
+      type: "string"
+      description: "Concise 1-sentence operational rationale explaining the routing decision."
+    is_comparison_candidate:
+      type: "boolean"
+      description: "Strictly True for DOCUMENT_COMPARISON requests that must proceed to 7-field discrepancy extraction."
+    missing_attachments_flag:
+      type: "boolean"
+      description: "True if DOCUMENT_COMPARISON is requested but necessary attachments are missing, corrupted, or unreadable."
+    detected_attachments:
+      type: "array"
+      items:
+        type: "string"
+      description: "Filenames of attachments analyzed during classification."
+
+category_boundaries:
+  DOCUMENT_COMPARISON:
+    intent: "The email asks to review, verify, approve, or cross-check a carrier draft Bill of Lading (BL) against a Shipping Instruction (SI), or provides both documents across the email body and attachments."
+    trigger_keywords:
+      - "draft BL"
+      - "draft B/L"
+      - "bill of lading"
+      - "shipping instructions"
+      - "SI"
+      - "verify draft"
+      - "check draft"
+      - "cross-check"
+      - "review draft"
+      - "confirm docs"
+      - "attached SI and draft BL"
+    downstream_routing_actions:
+      - "Proceed to Stage-2 7-field entity extraction (shipper, consignee, notify_party, port_of_loading, port_of_discharge, container_count, gross_weight_kg)."
+      - "Perform Stage-3 cross-document discrepancy validation."
+      - "If missing_attachments_flag is True, route to human exception queue with status NEEDS_REVIEW."
+
+  NEW_SI_REQUEST:
+    intent: "The sender submits initial or updated Shipping Instructions or booking details for booking creation/filing without any carrier draft BL attached or requested for cross-checking."
+    trigger_keywords:
+      - "shipping instruction"
+      - "new SI"
+      - "revised SI"
+      - "amended SI"
+      - "please file SI"
+      - "booking creation"
+      - "booking details"
+      - "initial SI"
+      - "shipping order"
+    downstream_routing_actions:
+      - "Route to Documentation & Booking Operations team for carrier SI submission and filing."
+      - "Does not proceed to BL discrepancy validation."
+
+  INVOICE_QUERY:
+    intent: "Inquiries, disputes, detention/demurrage fee questions, credit notes, payment receipts, or statement inquiries regarding freight billing and charges."
+    trigger_keywords:
+      - "invoice"
+      - "freight charges"
+      - "billing"
+      - "demurrage"
+      - "detention"
+      - "storage charges"
+      - "payment confirmation"
+      - "dispute charges"
+      - "overcharge"
+      - "receipt"
+    downstream_routing_actions:
+      - "Route to Finance & Accounts Receivable/Payable team for billing verification or dispute resolution."
+
+  GENERAL:
+    intent: "Operational schedule advisories, vessel delays, cut-off notices, equipment availability, blank sailings, terminal advisories, or general inquiries."
+    trigger_keywords:
+      - "vessel schedule"
+      - "delay"
+      - "cut-off"
+      - "eta"
+      - "etd"
+      - "blank sailing"
+      - "port congestion"
+      - "office hours"
+      - "advisory"
+      - "general inquiry"
+    downstream_routing_actions:
+      - "Route to Customer Service desk for operational reply or client advisory acknowledgment."
+
+  SPAM:
+    intent: "Unsolicited commercial marketing, promotions, external sales solicitations, phishing, or irrelevant correspondence unrelated to shipping operations."
+    trigger_keywords:
+      - "special offer"
+      - "sales promotion"
+      - "unsolicited"
+      - "marketing campaign"
+      - "SEO services"
+      - "discount"
+      - "partnership opportunity"
+    downstream_routing_actions:
+      - "Filter out and route to spam/archive folder. No operational action taken."

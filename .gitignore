@@ -9,3 +9,10 @@ node_modules/
 *.tsbuildinfo
 .env
 .env.local
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+data
+submission.json
+.env
