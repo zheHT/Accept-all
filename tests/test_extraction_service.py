@@ -59,12 +59,38 @@ async def test_missing_attachment_wins_without_calling_extractor():
 
 
 @pytest.mark.asyncio
+async def test_missing_attachment_wins_before_corrupt_document_is_prepared():
+    extractor = AsyncMock()
+
+    result = await process_document_pair(
+        DocumentInput("si.pdf", b"%PDF corrupt"), None, extractor=extractor
+    )
+
+    assert result.validation.review_reason == ReviewReason.MISSING_ATTACHMENT
+    assert extractor.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_corrupt_document_returns_unreadable_without_calling_extractor():
     extractor = AsyncMock()
 
     result = await process_document_pair(
         DocumentInput("si.pdf", b"%PDF corrupt"),
         text_input("bl.txt", BL_TEXT),
+        extractor=extractor,
+    )
+
+    assert result.validation.review_reason == ReviewReason.UNREADABLE
+    assert extractor.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_unreadable_wins_before_wrong_document_type():
+    extractor = AsyncMock()
+
+    result = await process_document_pair(
+        DocumentInput("si.pdf", b"%PDF corrupt"),
+        text_input("bl.txt", "COMMERCIAL INVOICE\nInvoice No: 1"),
         extractor=extractor,
     )
 
