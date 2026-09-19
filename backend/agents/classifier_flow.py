@@ -348,10 +348,11 @@ Respond with the exact JSON matching EmailClassification schema."""
             classification.category == EmailCategory.DOCUMENT_COMPARISON
         )
 
-        # Post-processing guardrail: check missing/unreadable attachments
+        # Post-processing guardrail: Pillar 3 owns readability; this is count-only.
         if classification.category == EmailCategory.DOCUMENT_COMPARISON:
-            if _check_missing_attachments(classification.category, att_dict):
-                classification.missing_attachments_flag = True
+            classification.missing_attachments_flag = _check_missing_attachments(
+                classification.category, att_dict
+            )
 
         return classification
 
@@ -362,5 +363,8 @@ Respond with the exact JSON matching EmailClassification schema."""
         raise
     finally:
         if live_client is not None:
-            live_client.close()
+            try:
+                live_client.close()
+            except Exception:
+                logger.warning("Could not close Gemini client.", exc_info=True)
 

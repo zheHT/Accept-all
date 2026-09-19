@@ -178,6 +178,39 @@ def test_classifier_closes_client_after_sdk_failure(mock_gemini_client):
     assert mock_gemini_client.close.called
 
 
+def test_classifier_preserves_request_error_when_client_close_fails(mock_gemini_client):
+    """A cleanup failure cannot replace the Gemini request failure."""
+    mock_gemini_client.models.generate_content.side_effect = RuntimeError("request failed")
+    mock_gemini_client.close.side_effect = RuntimeError("close failed")
+
+    with pytest.raises(RuntimeError, match="request failed"):
+        classify_email(
+            email_id="client_cleanup_request_failure",
+            subject="Draft BL check",
+            sender="ops@example.com",
+            body="Please compare the draft BL and SI.",
+            attachment_previews={},
+        )
+
+
+def test_classifier_returns_result_when_client_close_fails(mock_gemini_client):
+    """A cleanup failure after a valid response does not discard classification."""
+    mock_gemini_client.close.side_effect = RuntimeError("close failed")
+
+    result = classify_email(
+        email_id="client_cleanup_success",
+        subject="Draft BL check",
+        sender="ops@example.com",
+        body="Please compare the draft BL and SI.",
+        attachment_previews={
+            "si.pdf": "[PDF document: original bytes retained]",
+            "bl.pdf": "[PDF document: original bytes retained]",
+        },
+    )
+
+    assert result.category == EmailCategory.DOCUMENT_COMPARISON
+
+
 # --------------------------------------------------------------------------
 # Area 3: Attachment Sniffer Resilience
 # --------------------------------------------------------------------------
@@ -290,6 +323,33 @@ def test_guardrail_document_comparison_with_valid_attachments(mock_gemini_client
     assert result.is_comparison_candidate is True
     assert result.missing_attachments_flag is False
     assert len(result.detected_attachments) == 2
+
+
+def test_guardrail_clears_llm_missing_flag_for_two_pdf_markers(mock_gemini_client):
+    """Two previews override an incorrect LLM missing-attachment flag."""
+    mock_response = MagicMock()
+    mock_response.text = json.dumps({
+        "category": "DOCUMENT_COMPARISON",
+        "confidence": 0.97,
+        "reasoning": "Both documents were supplied for downstream review.",
+        "is_comparison_candidate": True,
+        "missing_attachments_flag": True,
+        "detected_attachments": ["si.pdf", "bl.pdf"],
+    })
+    mock_gemini_client.models.generate_content.return_value = mock_response
+
+    result = classify_email(
+        email_id="two_pdf_markers",
+        subject="Review draft BL",
+        sender="ops@example.com",
+        body="Please compare the draft BL with our SI.",
+        attachment_previews={
+            "si.pdf": "[PDF document: original bytes retained]",
+            "bl.pdf": "[PDF document: original bytes retained]",
+        },
+    )
+
+    assert result.missing_attachments_flag is False
 
 
 def test_scanned_pdf_markers_are_not_missing_attachments():
