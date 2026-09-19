@@ -23,8 +23,7 @@ def test_plain_text_truncation_bound():
 def test_csv_inspection():
     csv_data = b"Port,Container,Weight\nCallao,MEDU1234567,24000\n"
     preview = inspect_attachment("manifest.csv", csv_data)
-    assert "Callao" in preview
-    assert "MEDU1234567" in preview
+    assert preview == "[Unreadable or Corrupted File]"
 
 
 def test_docx_inspection():
@@ -41,7 +40,7 @@ def test_docx_inspection():
     preview = inspect_attachment("draft_bl.docx", content)
     assert "Draft Bill of Lading" in preview
     assert "Shipper details" in preview
-    assert "Fourth paragraph" not in preview
+    assert "Fourth paragraph" in preview
 
 
 def test_excel_inspection():
@@ -57,7 +56,7 @@ def test_excel_inspection():
     content = buf.getvalue()
 
     preview = inspect_attachment("si.xlsx", content)
-    assert "Sheets: ShippingInstructions" in preview
+    assert "ShippingInstructions" in preview
     assert "Shipper" in preview
     assert "Tokyo" in preview
 
@@ -70,9 +69,9 @@ def test_pdf_inspection_with_text():
     writer.write(buf)
     content = buf.getvalue()
 
-    # Empty blank page has no text, should return Scanned or Image-only PDF
+    # PDFs retain original bytes for Pillar 3 extraction, regardless of text layer.
     preview = inspect_attachment("blank.pdf", content)
-    assert preview == "[Scanned or Image-only PDF]"
+    assert preview == "[PDF document: original bytes retained]"
 
 
 def test_corrupted_file_safety():

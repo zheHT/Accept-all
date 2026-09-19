@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.agents.classifier_flow import classify_email, client
+from backend.agents.classifier_flow import classify_email
 from backend.models.schemas import EmailClassification, EmailInputPayload
 from backend.utils.attachment_sniffer import inspect_attachment
 

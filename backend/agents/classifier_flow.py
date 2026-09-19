@@ -1,4 +1,4 @@
-"""Triage classifier agent for maritime shipping correspondence using Gemini 1.5 Flash."""
+"""Triage classifier agent for maritime shipping correspondence using Gemini 2.5 Flash."""
 import json
 import logging
 import os
@@ -13,30 +13,6 @@ from backend.models.schemas import EmailCategory, EmailClassification
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-client: Optional[genai.Client] = None
-
-
-def get_client() -> Optional[genai.Client]:
-    """Retrieve or dynamically initialize the GenAI Client when API key is available."""
-    global client
-    if client is not None:
-        return client
-    load_dotenv(override=True)
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if api_key:
-        try:
-            client = genai.Client(api_key=api_key)
-            logger.info("Successfully initialized google.genai Client with API key.")
-        except Exception as e:
-            logger.warning(f"Could not initialize google.genai Client: {e}. Fallback enabled.")
-            client = None
-    return client
-
-
-# Initial check at import time
-get_client()
-
 
 SYSTEM_INSTRUCTION = """You are an expert Maritime Shipping Operations Triage Agent.
 Your job is to analyze incoming customer service correspondence and classify each email into exactly one of five operational categories:
@@ -156,29 +132,11 @@ def _check_missing_attachments(
     category: EmailCategory,
     attachment_previews: Optional[dict[str, str]],
 ) -> bool:
-    """Guardrail to flag missing, corrupted, or unreadable attachments for DOCUMENT_COMPARISON."""
-    if category != EmailCategory.DOCUMENT_COMPARISON:
-        return False
-
-    if not attachment_previews:
-        return True
-
-    # Check if there are valid readable attachments
-    unreadable_tags = [
-        "[Unreadable or Corrupted File]",
-        "[Scanned or Image-only PDF]",
-    ]
-
-    readable_count = 0
-    for name, content in attachment_previews.items():
-        if not content:
-            continue
-        trimmed = content.strip()
-        if trimmed and trimmed not in unreadable_tags and len(trimmed) > 10:
-            readable_count += 1
-
-    # In maritime BL vs SI comparison, we expect at least 1 readable attachment (or 2)
-    return readable_count < 1
+    """Flag only absent document previews; Pillar 3 owns document readability."""
+    return (
+        category == EmailCategory.DOCUMENT_COMPARISON
+        and len(attachment_previews or {}) < 2
+    )
 
 
 def _classify_with_heuristics(
@@ -307,7 +265,7 @@ def classify_email(
     body: str,
     attachment_previews: Optional[dict[str, str]] = None,
 ) -> EmailClassification:
-    """Classify an email using Gemini 1.5 Flash structured output with deterministic fallback.
+    """Classify an email using Gemini 2.5 Flash structured output.
 
     Args:
         email_id: Unique identifier of the email.
@@ -319,7 +277,6 @@ def classify_email(
     Returns:
         EmailClassification Pydantic model.
     """
-    global client
     att_dict = attachment_previews or {}
     detected_att_names = list(att_dict.keys())
 
@@ -342,7 +299,7 @@ Attached Document Previews:
 
 Respond with the exact JSON matching EmailClassification schema."""
 
-    # FORCE LIVE GEMINI 1.5 FLASH CALL (Fallback disabled per Task 3)
+    # FORCE LIVE GEMINI 2.5 FLASH CALL (Fallback disabled per Task 3)
     load_dotenv(override=True)
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -356,10 +313,11 @@ Respond with the exact JSON matching EmailClassification schema."""
 
     import traceback
 
+    live_client = None
     try:
         live_client = genai.Client(api_key=api_key)
         response = live_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
             contents=user_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
@@ -402,4 +360,7 @@ Respond with the exact JSON matching EmailClassification schema."""
         logger.error(f"Live Gemini API call failed for email {email_id}:\n{stack_trace}")
         print(f"\n[ERROR] Live Gemini API call failed for {email_id}: {e}\n{stack_trace}")
         raise
+    finally:
+        if live_client is not None:
+            live_client.close()
 

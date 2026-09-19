@@ -1,9 +1,37 @@
 """Integration tests for FastAPI endpoints."""
+import json
+import os
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def fake_gemini_client():
+    """Keep normal API tests offline while preserving the SDK response boundary."""
+    def generate_content(*, contents, **_):
+        category = "INVOICE_QUERY" if "invoice" in contents.lower() else "DOCUMENT_COMPARISON"
+        return SimpleNamespace(text=json.dumps({
+            "category": category,
+            "confidence": 0.95,
+            "reasoning": "Offline Gemini response for API behavior testing.",
+            "is_comparison_candidate": category == "DOCUMENT_COMPARISON",
+            "missing_attachments_flag": False,
+            "detected_attachments": [],
+        }))
+
+    sdk_client = MagicMock()
+    sdk_client.models.generate_content.side_effect = generate_content
+    with patch("backend.agents.classifier_flow.genai.Client", return_value=sdk_client), patch.dict(
+        os.environ, {"GEMINI_API_KEY": "test-key"}
+    ):
+        yield sdk_client
 
 
 def test_health_endpoint():
