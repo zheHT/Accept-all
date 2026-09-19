@@ -9,6 +9,7 @@ node_modules/
 *.tsbuildinfo
 .env
 .env.local
+/frontend/.env.production
 __pycache__/
 *.pyc
 *.pyo

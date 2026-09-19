@@ -5,7 +5,7 @@ import docx
 import openpyxl
 import pypdf
 
-from backend.utils.attachment_sniffer import MAX_CHARS, inspect_attachment
+from backend.evaluation_adapter.attachment_sniffer import MAX_CHARS, inspect_attachment
 
 
 def test_plain_text_inspection():

@@ -22,15 +22,15 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from backend.agents.classifier_flow import (
+from backend.evaluation_adapter.attachment_sniffer import MAX_CHARS, inspect_attachment
+from backend.evaluation_adapter.classifier_flow import (
     classify_email,
 )
-from backend.main import app
-from backend.models.schemas import (
+from backend.evaluation_adapter.main import app
+from backend.evaluation_adapter.schemas import (
     EmailCategory,
     EmailClassification,
 )
-from backend.utils.attachment_sniffer import MAX_CHARS, inspect_attachment
 
 
 # --------------------------------------------------------------------------
@@ -39,7 +39,7 @@ from backend.utils.attachment_sniffer import MAX_CHARS, inspect_attachment
 @pytest.fixture
 def mock_gemini_client():
     """Mock fixture for google.genai Client to prevent external network calls."""
-    with patch("backend.agents.classifier_flow.genai.Client") as mock_client_cls, \
+    with patch("backend.evaluation_adapter.classifier_flow.genai.Client") as mock_client_cls, \
          patch.dict("os.environ", {"GEMINI_API_KEY": "AIzaSy_mock_api_key_test_12345"}):
         mock_client_instance = MagicMock()
         mock_client_cls.return_value = mock_client_instance

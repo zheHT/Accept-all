@@ -6,9 +6,9 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.agents.classifier_flow import classify_email
-from backend.models.schemas import EmailClassification, EmailInputPayload
-from backend.utils.attachment_sniffer import inspect_attachment
+from backend.evaluation_adapter.attachment_sniffer import inspect_attachment
+from backend.evaluation_adapter.classifier_flow import classify_email
+from backend.evaluation_adapter.schemas import EmailClassification, EmailInputPayload
 
 
 @asynccontextmanager
@@ -123,4 +123,6 @@ def classify_endpoint(payload: EmailInputPayload) -> EmailClassification:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "backend.evaluation_adapter.main:app", host="0.0.0.0", port=8000, reload=True
+    )

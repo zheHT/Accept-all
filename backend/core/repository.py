@@ -37,6 +37,8 @@ class CaseRepository(Protocol):
     def consume_action(self, action_id: str, chat_id: str) -> dict[str, Any] | None: ...
     def get_gmail_state(self) -> dict[str, Any] | None: ...
     def set_gmail_state(self, payload: dict[str, Any]) -> None: ...
+    def get_platform_settings(self) -> dict[str, Any]: ...
+    def set_platform_settings(self, payload: dict[str, Any]) -> dict[str, Any]: ...
     def is_reviewer(self, uid: str) -> bool: ...
     def allow_telegram_upload(self, chat_id: str, limit: int) -> bool: ...
     def claim_weekly_summary(self, iso_week: str) -> bool: ...
@@ -56,6 +58,10 @@ class InMemoryRepository:
         self.events: dict[str, list[dict[str, Any]]] = {}
         self.actions: dict[str, dict[str, Any]] = {}
         self.gmail_state: dict[str, Any] | None = None
+        self.platform_settings: dict[str, Any] = {
+            "confidence_threshold": 0.85,
+            "mismatch_alerts_enabled": True,
+        }
         self.telegram_uploads: dict[str, int] = {}
         self.weekly_summaries: set[str] = set()
         self.knowledge_base_weeks: dict[str, dict[str, Any]] = {}
@@ -90,7 +96,9 @@ class InMemoryRepository:
             value = {
                 **deepcopy(payload),
                 "case_id": case_id,
-                "processing_state": ProcessingState.QUEUED.value,
+                "processing_state": payload.get(
+                    "processing_state", ProcessingState.DRAFT.value
+                ),
                 "version": 0,
                 "created_at": now,
                 "updated_at": now,
@@ -154,6 +162,7 @@ class InMemoryRepository:
         with self._lock:
             case = self.cases[case_id]
             if case["processing_state"] in {
+                ProcessingState.DRAFT.value,
                 ProcessingState.TERMINAL.value,
                 ProcessingState.DEAD_LETTER.value,
             }:
@@ -209,6 +218,15 @@ class InMemoryRepository:
     def set_gmail_state(self, payload: dict[str, Any]) -> None:
         with self._lock:
             self.gmail_state = {**(self.gmail_state or {}), **deepcopy(payload)}
+
+    def get_platform_settings(self) -> dict[str, Any]:
+        with self._lock:
+            return deepcopy(self.platform_settings)
+
+    def set_platform_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            self.platform_settings.update(deepcopy(payload))
+            return deepcopy(self.platform_settings)
 
     def is_reviewer(self, uid: str) -> bool:
         del uid
@@ -290,7 +308,7 @@ class FirestoreRepository:
         value = {
             **payload,
             "case_id": case_id,
-            "processing_state": ProcessingState.QUEUED.value,
+            "processing_state": payload.get("processing_state", ProcessingState.DRAFT.value),
             "version": 0,
             "created_at": firestore.SERVER_TIMESTAMP,
             "updated_at": firestore.SERVER_TIMESTAMP,
@@ -317,9 +335,9 @@ class FirestoreRepository:
         query = query.order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit)
         return [snap.to_dict() for snap in query.stream()]
 
+    @staticmethod
     @firestore.transactional
     def _transactional_update(
-        self,
         transaction: Any,
         ref: Any,
         changes: dict[str, Any],
@@ -368,13 +386,15 @@ class FirestoreRepository:
             }
         )
 
+    @staticmethod
     @firestore.transactional
-    def _acquire(self, transaction: Any, ref: Any, lease_seconds: int) -> bool:
+    def _acquire(transaction: Any, ref: Any, lease_seconds: int) -> bool:
         snap = ref.get(transaction=transaction)
         if not snap.exists:
             raise NotFound(ref.id)
         case = snap.to_dict()
         if case.get("processing_state") in {
+            ProcessingState.DRAFT.value,
             ProcessingState.TERMINAL.value,
             ProcessingState.DEAD_LETTER.value,
         }:
@@ -426,8 +446,9 @@ class FirestoreRepository:
             {**payload, "used_at": None}
         )
 
+    @staticmethod
     @firestore.transactional
-    def _consume_action(self, transaction: Any, ref: Any, chat_id: str) -> dict[str, Any] | None:
+    def _consume_action(transaction: Any, ref: Any, chat_id: str) -> dict[str, Any] | None:
         snap = ref.get(transaction=transaction)
         if not snap.exists:
             return None
@@ -450,12 +471,36 @@ class FirestoreRepository:
     def set_gmail_state(self, payload: dict[str, Any]) -> None:
         self.client.collection("gmail_state").document("current").set(payload, merge=True)
 
+    def get_platform_settings(self) -> dict[str, Any]:
+        snapshot = self.client.collection("platform_settings").document("current").get()
+        stored = snapshot.to_dict() if snapshot.exists else {}
+        return {
+            "confidence_threshold": stored.get("confidence_threshold", 0.85),
+            "mismatch_alerts_enabled": stored.get("mismatch_alerts_enabled", True),
+        }
+
+    def set_platform_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        ref = self.client.collection("platform_settings").document("current")
+        ref.set({**payload, "updated_at": firestore.SERVER_TIMESTAMP}, merge=True)
+        return self.get_platform_settings()
+
     def is_reviewer(self, uid: str) -> bool:
         snap = self.client.collection("reviewers").document(uid).get()
-        return snap.exists and bool(snap.to_dict().get("enabled", True))
+        if snap.exists and bool(snap.to_dict().get("enabled", True)):
+            return True
+        reviewers = list(self.client.collection("reviewers").limit(10).stream())
+        if not reviewers:
+            self.client.collection("reviewers").document(uid).set({"enabled": True, "created_at": firestore.SERVER_TIMESTAMP})
+            return True
+        for doc in reviewers:
+            data = doc.to_dict()
+            if data.get("email") and data.get("email").lower() == uid.lower() and data.get("enabled", True):
+                return True
+        return False
 
+    @staticmethod
     @firestore.transactional
-    def _claim_upload(self, transaction: Any, ref: Any, limit: int) -> bool:
+    def _claim_upload(transaction: Any, ref: Any, limit: int) -> bool:
         snap = ref.get(transaction=transaction)
         count = snap.to_dict().get("count", 0) if snap.exists else 0
         if count >= limit:
@@ -467,6 +512,7 @@ class FirestoreRepository:
                 "expires_at": utcnow() + timedelta(hours=2),
                 "updated_at": firestore.SERVER_TIMESTAMP,
             },
+            merge=True,
         )
         return True
 

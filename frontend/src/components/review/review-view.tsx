@@ -1,419 +1,68 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, Search, SearchX, UserRoundSearch, X } from "lucide-react";
-import { cn } from "@/lib/cn";
-import { StatBar, type StatSegment } from "@/components/ui/stat-bar";
+import { useEffect, useState } from "react";
+import { Check, Send, ThumbsDown } from "lucide-react";
+import { ApiError, getCase, getReviews, reviewCase, sendDraft, updateDraft, type CaseDetail, type CaseSummary } from "@/lib/api";
+import { useLiveQuery } from "@/lib/use-live-query";
 import { useToast } from "@/components/ui/toast";
-import { useWorkspaceCounts } from "@/components/workspace/workspace-counts";
-import { ReviewDetail } from "./review-detail";
-import {
-  REVIEW_CASES,
-  REVIEW_REASON_LABELS,
-  REVIEW_STATUS_META,
-  REVIEW_SUMMARY,
-  type ReviewCase,
-  type ReviewDecision,
-  type ReviewReasonCode,
-} from "@/lib/review-data";
-import { readParam, writeParam } from "@/lib/url-state";
-
-type ReasonFilter = "all" | ReviewReasonCode;
-/** Which summary card is acting as a filter. */
-type GroupFilter = "none" | "pending" | "unreadable_missing" | "ambiguous";
-type SortOrder = "oldest" | "newest";
-
-const REASON_OPTIONS: Array<{ value: ReasonFilter; label: string }> = [
-  { value: "all", label: "All Reasons" },
-  ...(Object.keys(REVIEW_REASON_LABELS) as ReviewReasonCode[]).map((value) => ({
-    value,
-    label: REVIEW_REASON_LABELS[value],
-  })),
-];
-
-const SORT_OPTIONS: Array<{ value: SortOrder; label: string }> = [
-  { value: "oldest", label: "Oldest First" },
-  { value: "newest", label: "Newest First" },
-];
-
-const SUMMARY_SEGMENTS: StatSegment[] = [
-  {
-    id: "pending",
-    label: "Pending Review",
-    value: REVIEW_SUMMARY.pending,
-    support: "Cases waiting for human action",
-    accent: "bg-review-500",
-    share: 100,
-  },
-  {
-    id: "unreadable_missing",
-    label: "Unreadable / Missing",
-    value: REVIEW_SUMMARY.unreadableOrMissing,
-    support: "Cases with incomplete document information",
-    accent: "bg-failed-500",
-    share: Math.round((REVIEW_SUMMARY.unreadableOrMissing / REVIEW_SUMMARY.pending) * 100),
-  },
-  {
-    id: "ambiguous",
-    label: "Ambiguous",
-    value: REVIEW_SUMMARY.ambiguous,
-    support: "Cases where the extracted information is uncertain",
-    accent: "bg-processing-500",
-    share: Math.round((REVIEW_SUMMARY.ambiguous / REVIEW_SUMMARY.pending) * 100),
-  },
-];
-
-const GROUP_REASONS: Record<Exclude<GroupFilter, "none" | "pending">, ReviewReasonCode[]> = {
-  unreadable_missing: ["unreadable_document", "missing_information"],
-  ambiguous: ["ambiguous_value", "low_confidence", "processing_issue"],
-};
+import { CaseDetailPanel } from "@/components/cases/case-detail-panel";
+import { LiveCaseTable } from "@/components/cases/live-case-table";
+import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
 
 export function ReviewView() {
   const toast = useToast();
-  const { markReviewOpened } = useWorkspaceCounts();
-  const [cases, setCases] = useState<ReviewCase[]>(REVIEW_CASES);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [reason, setReason] = useState<ReasonFilter>("all");
-  const [group, setGroup] = useState<GroupFilter>("none");
-  const [sort, setSort] = useState<SortOrder>("oldest");
+  const query = useLiveQuery((signal) => getReviews(signal), []);
+  const [detail, setDetail] = useState<CaseDetail | null>(null);
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  /** `?case=1022` opens a case directly, including from the Verification Cases page. */
+  const open = async (item: CaseSummary | CaseDetail) => {
+    const next = await getCase(item.case_id);
+    setDetail(next);
+    setSubject(next.draft?.subject || "");
+    setBody(next.draft?.body || "");
+    window.history.replaceState(null, "", `?case=${item.case_id}`);
+  };
   useEffect(() => {
-    const requested = readParam("case");
-    if (requested && REVIEW_CASES.some((item) => item.id === requested)) {
-      setOpenId(requested);
-      markReviewOpened(requested);
-    }
-  }, [markReviewOpened]);
-
-  const openCase = useCallback(
-    (item: ReviewCase) => {
-      setOpenId(item.id);
-      writeParam("case", item.id);
-      markReviewOpened(item.id);
-      // Opening a case is what moves it from Pending to In Review.
-      setCases((current) =>
-        current.map((entry) =>
-          entry.id === item.id && entry.status === "pending"
-            ? { ...entry, status: "in_review" }
-            : entry,
-        ),
-      );
-    },
-    [markReviewOpened],
-  );
-
-  const closeCase = useCallback(() => {
-    setOpenId(null);
-    writeParam("case", null);
+    const id = new URLSearchParams(window.location.search).get("case");
+    if (id) void getCase(id).then((item) => { setDetail(item); setSubject(item.draft?.subject || ""); setBody(item.draft?.body || "") }).catch(() => undefined);
   }, []);
 
-  const submitDecision = useCallback(
-    (id: string, decision: ReviewDecision) => {
-      setCases((current) =>
-        current.map((item) =>
-          item.id === id ? { ...item, decision, status: "resolved" } : item,
-        ),
-      );
-      const item = cases.find((entry) => entry.id === id);
-      toast({
-        title: `${item?.shipment ?? "Case"} review submitted`,
-        description:
-          decision.type === "unreadable"
-            ? "Marked unreadable. A readable copy will be requested from the sender."
-            : `${item?.problemField ?? "Field"} recorded as “${decision.value}” by ${decision.reviewer}.`,
-        tone: "success",
-      });
-    },
-    [cases, toast],
-  );
-
-  const filtersActive = query.trim() !== "" || reason !== "all" || group !== "none" || sort !== "oldest";
-
-  const clearFilters = () => {
-    setQuery("");
-    setReason("all");
-    setGroup("none");
-    setSort("oldest");
+  const stale = async (error: unknown) => {
+    if (error instanceof ApiError && error.status === 409 && detail) {
+      await open(detail);
+      toast({ title: "Case changed", description: "The latest version is open. Review it and repeat the action.", tone: "warning" });
+      return true;
+    }
+    return false;
+  };
+  const decide = async (decision: "APPROVE" | "DECLINE") => {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await reviewCase(detail, decision);
+      await query.refresh();
+      if (decision === "APPROVE") {
+        setDetail(null);
+        toast({ title: "Case approved", tone: "success" });
+      } else {
+        await open(detail);
+        toast({ title: detail.source_type === "gmail" ? "Gmail draft created" : "Case declined", tone: "success" });
+      }
+    } catch (error) {
+      if (!(await stale(error))) toast({ title: "Review action failed", tone: "warning" });
+    } finally { setBusy(false) }
   };
 
-  const rows = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-
-    const filtered = cases.filter((item) => {
-      if (reason !== "all" && item.reasonCode !== reason) return false;
-      if (group === "pending" && item.status === "resolved") return false;
-      if (group !== "none" && group !== "pending" && !GROUP_REASONS[group].includes(item.reasonCode)) {
-        return false;
-      }
-      if (!needle) return true;
-      return [item.caseId, item.shipment, item.problemField, item.reason]
-        .join(" ")
-        .toLowerCase()
-        .includes(needle);
-    });
-
-    // Resolved cases always sink to the bottom: this is a work queue first.
-    return filtered.sort((a, b) => {
-      const resolvedDiff = Number(a.status === "resolved") - Number(b.status === "resolved");
-      if (resolvedDiff !== 0) return resolvedDiff;
-      return sort === "oldest" ? b.createdOrder - a.createdOrder : a.createdOrder - b.createdOrder;
-    });
-  }, [cases, query, reason, group, sort]);
-
-  const activeCase = openId ? (cases.find((item) => item.id === openId) ?? null) : null;
-
-  if (activeCase) {
-    return (
-      <ReviewDetail
-        reviewCase={activeCase}
-        onBack={closeCase}
-        onSubmit={(decision) => submitDecision(activeCase.id, decision)}
-      />
-    );
-  }
+  if (query.loading && !query.data) return <LoadingState label="Loading unresolved reviews" />;
+  if (query.error && !query.data) return <ErrorState message={query.error} retry={() => void query.refresh()} />;
 
   return (
     <>
-      <section className="flex flex-col gap-3">
-        <p className="eyebrow">Review workload — select to filter the queue</p>
-        <StatBar
-          segments={SUMMARY_SEGMENTS}
-          activeId={group}
-          onSelect={(id) => setGroup(group === id ? "none" : (id as GroupFilter))}
-        />
-      </section>
-
-      <section className="glass glass-sheen flex flex-col gap-3 p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-          <label className="relative flex-1 lg:min-w-[320px]">
-            <Search
-              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-400"
-              strokeWidth={2}
-            />
-            <input
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search shipment, case ID, or field..."
-              className="field-glass py-2.5 pl-9 pr-3"
-            />
-          </label>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="relative">
-              <span className="sr-only">Reason filter</span>
-              <select
-                value={reason}
-                onChange={(event) => setReason(event.target.value as ReasonFilter)}
-                className="field-glass w-auto cursor-pointer appearance-none py-2.5 pl-3 pr-9 font-medium"
-              >
-                {REASON_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                className="pointer-events-none absolute right-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-400"
-                strokeWidth={2.25}
-              />
-            </label>
-
-            <label className="relative">
-              <span className="sr-only">Sort order</span>
-              <select
-                value={sort}
-                onChange={(event) => setSort(event.target.value as SortOrder)}
-                className="field-glass w-auto cursor-pointer appearance-none py-2.5 pl-3 pr-9 font-medium"
-              >
-                {SORT_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                className="pointer-events-none absolute right-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-400"
-                strokeWidth={2.25}
-              />
-            </label>
-          </div>
-        </div>
-
-        <div>
-          <button
-            type="button"
-            onClick={clearFilters}
-            disabled={!filtersActive}
-            className={cn(
-              "btn-quiet",
-              !filtersActive && "cursor-not-allowed opacity-40 hover:bg-transparent",
-            )}
-          >
-            <X className="size-3.5" strokeWidth={2.25} />
-            Clear Filters
-          </button>
-        </div>
-      </section>
-
-      <section className="glass glass-sheen overflow-hidden">
-        <header className="flex flex-col gap-1 border-b border-line px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">
-              Cases Awaiting Review
-            </h2>
-            <p className="mt-1 text-[13px] text-ink-500">
-              The engine stopped on these cases rather than guessing a value.
-            </p>
-          </div>
-          <span className="tabular shrink-0 text-[12px] text-ink-400">
-            {rows.length} of {REVIEW_SUMMARY.pending} pending cases
-          </span>
-        </header>
-
-        {rows.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 px-6 py-16 text-center">
-            <SearchX className="size-6 text-ink-300" strokeWidth={1.75} />
-            <p className="text-[14px] font-medium text-ink-700">No cases match these filters</p>
-            <button type="button" onClick={clearFilters} className="btn-glass mt-2">
-              Clear Filters
-            </button>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1080px] border-separate border-spacing-0 text-left">
-              <thead className="bg-surface/45">
-                <tr className="text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-400">
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    Case
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    Shipment
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    Problem Field
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    Review Reason
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    AI Confidence
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    Current Status
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    Created
-                  </th>
-                  <th scope="col" className="px-4 py-3 text-right font-semibold">
-                    Action
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((item) => {
-                  const status = REVIEW_STATUS_META[item.status];
-                  return (
-                    <tr
-                      key={item.id}
-                      onClick={() => openCase(item)}
-                      className="group cursor-pointer transition-colors hover:bg-surface/70"
-                    >
-                      <td className="border-t border-line px-4 py-4 align-middle">
-                        <span className="font-mono text-[12px] text-ink-400">{item.caseId}</span>
-                      </td>
-                      <td className="border-t border-line px-4 py-4 align-middle">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openCase(item);
-                          }}
-                          className="text-[13.5px] font-semibold tracking-tight text-ink-900 underline-offset-4 hover:text-brand-700 hover:underline"
-                        >
-                          {item.shipment}
-                        </button>
-                      </td>
-                      <td className="border-t border-line px-4 py-4 align-middle">
-                        <span className="text-[13px] font-semibold text-review-700">
-                          {item.problemField}
-                        </span>
-                      </td>
-                      <td className="border-t border-line px-4 py-4 align-middle">
-                        <span
-                          title={item.reasonDetail}
-                          className="block max-w-[260px] cursor-help text-[12.5px] text-ink-700"
-                        >
-                          {item.reason}
-                          <span className="mt-0.5 block text-[11px] text-ink-400">
-                            {REVIEW_REASON_LABELS[item.reasonCode]}
-                          </span>
-                        </span>
-                      </td>
-                      <td className="border-t border-line px-4 py-4 align-middle">
-                        <ConfidenceMeter value={item.confidence} />
-                      </td>
-                      <td className="border-t border-line px-4 py-4 align-middle">
-                        <span
-                          title={status.hint}
-                          className={cn(
-                            "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11.5px] font-medium",
-                            status.chip,
-                          )}
-                        >
-                          <span className={cn("size-1.5 rounded-full", status.dot)} />
-                          {status.label}
-                        </span>
-                      </td>
-                      <td className="border-t border-line px-4 py-4 align-middle text-[12.5px] text-ink-500">
-                        {item.created}
-                      </td>
-                      <td className="border-t border-line px-4 py-4 text-right align-middle">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openCase(item);
-                          }}
-                          className={cn(
-                            "inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-semibold transition-all",
-                            item.status === "resolved"
-                              ? "border border-line-strong bg-surface/70 text-ink-700 shadow-glass hover:bg-surface"
-                              : "bg-review-500 text-white shadow-glass hover:brightness-105 dark:text-canvas",
-                          )}
-                        >
-                          <UserRoundSearch className="size-3.5" strokeWidth={2.25} />
-                          {item.status === "resolved" ? "View" : "Review"}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      {query.stale && <StaleNotice />}
+      <section className="glass glass-sheen overflow-hidden"><header className="border-b border-line px-5 py-4"><h2 className="text-[15px] font-semibold text-ink-900">Unresolved review cases</h2><p className="mt-1 text-[12px] text-ink-500">Approve a result or decline it and prepare a guarded Gmail draft.</p></header><LiveCaseTable items={query.data?.items ?? []} onOpen={(item) => void open(item)} emptyTitle="No unresolved reviews" /></section>
+      {detail && <CaseDetailPanel item={detail} onClose={() => { setDetail(null); window.history.replaceState(null, "", window.location.pathname) }} footer={detail.draft ? <div className="space-y-3"><label className="block text-[12px] font-medium text-ink-700">Draft subject<input className="field-glass mt-1" value={subject} onChange={(event) => setSubject(event.target.value)} /></label><label className="block text-[12px] font-medium text-ink-700">Draft body<textarea className="field-glass mt-1 min-h-32 resize-y" value={body} onChange={(event) => setBody(event.target.value)} /></label><div className="flex flex-wrap gap-2"><button type="button" disabled={busy} className="btn-glass active:scale-95" onClick={() => { setBusy(true); void updateDraft(detail.case_id, detail.version, subject, body).then(() => open(detail)).then(() => toast({ title: "Draft saved", tone: "success" })).catch(stale).finally(() => setBusy(false)) }}>Save draft</button><button type="button" disabled={busy} className="btn-primary active:scale-95" onClick={() => { setBusy(true); void sendDraft(detail.case_id, detail.version, detail.draft?.content_hash || "").then(() => query.refresh()).then(() => { setDetail(null); toast({ title: "Draft sent", tone: "success" }) }).catch(stale).finally(() => setBusy(false)) }}><Send className="size-4" />Send Gmail draft</button></div></div> : <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} className="btn-primary active:scale-95" onClick={() => void decide("APPROVE")}><Check className="size-4" />Approve</button><button type="button" disabled={busy} className="btn-glass active:scale-95" onClick={() => void decide("DECLINE")}><ThumbsDown className="size-4" />Decline and draft</button></div>} />}
     </>
-  );
-}
-
-function ConfidenceMeter({ value }: { value: number }) {
-  const pct = Math.round(value * 100);
-  const tone =
-    value >= 0.7 ? "from-review-500 to-review-700" : "from-failed-500 to-failed-700";
-
-  return (
-    <span className="flex items-center gap-2.5">
-      <span className="h-1.5 w-12 overflow-hidden rounded-full bg-surface/80 ring-1 ring-inset ring-line">
-        <span
-          className={cn("block h-full rounded-full bg-gradient-to-r", tone)}
-          style={{ width: `${pct}%` }}
-        />
-      </span>
-      <span className="tabular text-[12.5px] font-semibold text-ink-700">{pct}%</span>
-    </span>
   );
 }

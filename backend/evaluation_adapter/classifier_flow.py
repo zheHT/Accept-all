@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 from pydantic import ValidationError
 
-from backend.models.schemas import EmailCategory, EmailClassification
+from backend.evaluation_adapter.schemas import EmailCategory, EmailClassification
 
 load_dotenv()
 logger = logging.getLogger(__name__)

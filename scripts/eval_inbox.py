@@ -18,9 +18,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.agents.classifier_flow import classify_email
-from backend.models.schemas import SubmissionItem
-from backend.utils.attachment_sniffer import inspect_attachment
+from backend.evaluation_adapter.attachment_sniffer import inspect_attachment
+from backend.evaluation_adapter.classifier_flow import classify_email
+from backend.evaluation_adapter.schemas import SubmissionItem
 from loader import Inbox
 
 # Category mapping for server scoring compatibility

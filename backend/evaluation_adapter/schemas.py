@@ -1,4 +1,4 @@
-"""Pydantic v2 schemas for the Maritime Shipping Email Classifier & Triage Agent."""
+"""Schemas for the isolated local evaluation adapter."""
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field

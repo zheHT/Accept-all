@@ -1,4 +1,4 @@
-"""Safe content inspector for maritime shipping email attachments."""
+"""Safe attachment inspector used only by the local evaluation adapter."""
 import io
 import os
 

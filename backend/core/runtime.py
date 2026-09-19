@@ -85,6 +85,7 @@ def build_runtime(settings: Settings, *, local_root: Path | None = None) -> Runt
         explainer=explainer,
         settings=settings,
         local_dir=(local_root or Path(".local-blobs")) / "knowledge_base",
+        blobs=blobs,
     )
     return Runtime(
         settings=settings,

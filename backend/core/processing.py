@@ -64,7 +64,11 @@ class CaseProcessor:
 
         try:
             outcome = self.router.infer(case.get("subject", ""), case.get("body", ""), attachments)
-            result = self._validate(outcome.extraction, attachments)
+            threshold = float(
+                self.repository.get_platform_settings().get("confidence_threshold", 0.85)
+            )
+            low_confidence_fields = self._low_confidence_fields(outcome.extraction, threshold)
+            result = self._validate(outcome.extraction, attachments, low_confidence_fields)
             changes = {
                 "category": outcome.extraction.category.value,
                 "result": result.model_dump(mode="json"),
@@ -72,6 +76,9 @@ class CaseProcessor:
                 "fallback_reason": outcome.fallback_reason,
                 "rationale": outcome.extraction.rationale,
                 "assumptions": outcome.extraction.assumptions,
+                "low_confidence": bool(low_confidence_fields),
+                "low_confidence_fields": low_confidence_fields,
+                "confidence_threshold": threshold,
                 "processing_error": None,
             }
             by_filename = {item.filename: item for item in outcome.extraction.documents}
@@ -109,7 +116,12 @@ class CaseProcessor:
             self.notifier.send_review_alert(completed)
         return completed
 
-    def _validate(self, extraction: Any, attachments: list[dict[str, Any]]) -> GraderResult:
+    def _validate(
+        self,
+        extraction: Any,
+        attachments: list[dict[str, Any]],
+        low_confidence_fields: list[str] | None = None,
+    ) -> GraderResult:
         if extraction.category != EmailCategory.BL_COMPARISON:
             return GraderResult(category=extraction.category, status=ResultStatus.OK)
         if len(attachments) < 2:
@@ -138,7 +150,25 @@ class CaseProcessor:
                 status=ResultStatus.NEEDS_REVIEW,
                 review_reason=ReviewReason.MISSING_VALUE,
             )
+        if low_confidence_fields:
+            return GraderResult(
+                category=extraction.category,
+                status=ResultStatus.NEEDS_REVIEW,
+                review_reason=ReviewReason.LOW_CONFIDENCE,
+            )
         return compare_documents(si_docs[0].fields, bl_docs[0].fields)
+
+    @staticmethod
+    def _low_confidence_fields(extraction: Any, threshold: float) -> list[str]:
+        public_names = {"gross_weight_kg": "gross_weight"}
+        affected: set[str] = set()
+        for document in extraction.documents:
+            if document.fields is None:
+                continue
+            for field_name, field_value in document.fields:
+                if field_value.value is not None and field_value.confidence < threshold:
+                    affected.add(public_names.get(field_name, field_name))
+        return sorted(affected)
 
     @staticmethod
     def _heuristic_category(subject: str, body: str) -> EmailCategory:

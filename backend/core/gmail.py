@@ -110,18 +110,24 @@ class GmailClient:
         )
 
     def history(self, start_history_id: str) -> dict[str, Any]:
-        return (
-            self.service()
-            .users()
-            .history()
-            .list(
+        service = self.service()
+        events: list[dict[str, Any]] = []
+        page_token: str | None = None
+        latest_history_id = start_history_id
+        while True:
+            request = service.users().history().list(
                 userId=self.address,
                 startHistoryId=start_history_id,
                 historyTypes=["messageAdded"],
                 labelId=self.label,
+                pageToken=page_token,
             )
-            .execute()
-        )
+            page = request.execute()
+            events.extend(page.get("history", []))
+            latest_history_id = str(page.get("historyId") or latest_history_id)
+            page_token = page.get("nextPageToken")
+            if not page_token:
+                return {"history": events, "historyId": latest_history_id}
 
     def parse_email_envelope(self, message_data: dict[str, Any]) -> EmailEnvelope:
         """Parse raw Gmail message payload into canonical EmailEnvelope."""
@@ -201,15 +207,31 @@ class GmailClient:
             .execute()
         )
 
-    def list_messages(self, query: str, max_results: int = 100) -> list[dict[str, str]]:
-        result = (
-            self.service()
-            .users()
-            .messages()
-            .list(userId=self.address, q=query, maxResults=max_results)
-            .execute()
-        )
-        return result.get("messages", [])
+    def list_messages(
+        self, query: str, max_results: int | None = None
+    ) -> list[dict[str, str]]:
+        service = self.service()
+        messages: list[dict[str, str]] = []
+        page_token: str | None = None
+        while True:
+            remaining = None if max_results is None else max_results - len(messages)
+            if remaining is not None and remaining <= 0:
+                return messages
+            page = (
+                service.users()
+                .messages()
+                .list(
+                    userId=self.address,
+                    q=query,
+                    maxResults=min(500, remaining) if remaining is not None else 500,
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+            messages.extend(page.get("messages", []))
+            page_token = page.get("nextPageToken")
+            if not page_token:
+                return messages
 
     def get_attachment(self, message_id: str, attachment_id: str) -> bytes:
         result = (

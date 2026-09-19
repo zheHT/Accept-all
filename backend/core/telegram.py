@@ -9,6 +9,60 @@ import httpx
 
 from backend.core.repository import CaseRepository, utcnow
 
+TELEGRAM_BOT_DESCRIPTION = (
+    "ClassAll is an intelligent maritime shipping document triage and reconciliation agent. "
+    "Upload Shipping Instructions (SI) and draft Bills of Lading (BL) to automatically detect "
+    "discrepancies across 7 verified fields, review alerts, and coordinate email responses."
+)
+
+TELEGRAM_BOT_SHORT_DESCRIPTION = (
+    "ClassAll Maritime Shipping Document Triage & SI/BL Discrepancy Verification Agent."
+)
+
+TELEGRAM_WELCOME_TEXT = (
+    "🚢 <b>Welcome to ClassAll Maritime Triage Agent!</b>\n\n"
+    "I am your automated operations assistant for maritime shipping correspondence "
+    "and shipping document verification.\n\n"
+    "<b>What I can do for you:</b>\n"
+    "• <b>SI vs. BL Discrepancy Detection:</b> Cross-check Shipping Instructions against draft "
+    "Bills of Lading across the 7 verified fields (shipper, consignee, notify party, POL, POD, "
+    "container count, and gross weight).\n"
+    "• <b>Correspondence Classification:</b> Automatically triage incoming customer messages "
+    "(BL comparison, new SI requests, invoices, and operational queries).\n"
+    "• <b>Interactive Reviews & Drafts:</b> Review flagged discrepancies and generate safe correction "
+    "drafts for Gmail with one tap.\n\n"
+    "<b>How to get started:</b>\n"
+    "1️⃣ <code>/newcase</code> — Start a new document verification case\n"
+    "2️⃣ Upload your SI and draft BL attachments with caption <code>#TOKEN</code>\n"
+    "3️⃣ <code>/submit TOKEN</code> — Run Gemini AI discrepancy analysis\n"
+    "4️⃣ <code>/help</code> — View full command reference & operational guide\n\n"
+    "<i>Tip: You can also ask me questions about maritime shipping or any specific case by mentioning its ID!</i>"
+)
+
+TELEGRAM_HELP_TEXT = (
+    "📋 <b>ClassAll Maritime Agent — Command Guide:</b>\n\n"
+    "<b>Case Intake Workflow:</b>\n"
+    "• <code>/newcase</code> — Generate a unique tracking token (e.g. <code>#a1b2c3</code>)\n"
+    "• Attach SI and BL documents (PDF, Word, or image) using caption <code>#TOKEN</code>\n"
+    "• <code>/submit TOKEN</code> — Queue the documents for 7-field AI analysis\n\n"
+    "<b>The 7 Verified Fields:</b>\n"
+    "1. <b>Shipper:</b> Exporter name & full address\n"
+    "2. <b>Consignee:</b> Receiver name & destination address\n"
+    "3. <b>Notify Party:</b> Arrival notice party\n"
+    "4. <b>Port of Loading (POL):</b> Origin port & code\n"
+    "5. <b>Port of Discharge (POD):</b> Destination port & code\n"
+    "6. <b>Container Count:</b> Container quantity & equipment types\n"
+    "7. <b>Gross Weight:</b> Cargo weight with metric unit\n\n"
+    "<b>Interactive Review Alerts:</b>\n"
+    "When a defect is detected, you will receive an alert with:\n"
+    "• <b>APPROVE:</b> Sign off on the case\n"
+    "• <b>DECLINE & DRAFT:</b> Generate a polite correction draft in Gmail\n"
+    "• <b>MANUAL CHECK:</b> Direct link to the live web dashboard\n\n"
+    "<b>Ask the AI:</b>\n"
+    "Mention any <code>case-&lt;id&gt;</code> (e.g. <code>case-18e47... why was this declined?</code>) "
+    "to query the stored evidence using Gemini!"
+)
+
 
 class TelegramClient:
     def __init__(self, token: str, timeout: float = 30.0) -> None:
@@ -55,6 +109,26 @@ class TelegramClient:
         response.raise_for_status()
         return response.content, file_path
 
+    def set_my_commands(self, commands: list[dict[str, str]] | None = None) -> dict[str, Any]:
+        cmds = commands or [
+            {"command": "start", "description": "Welcome & agent capabilities"},
+            {"command": "newcase", "description": "Create a new document triage case"},
+            {"command": "submit", "description": "Submit case token for discrepancy verification"},
+            {"command": "help", "description": "Show commands & 7-field verification guide"},
+        ]
+        return self._call("setMyCommands", {"commands": cmds})
+
+    def set_my_description(self, description: str) -> dict[str, Any]:
+        return self._call("setMyDescription", {"description": description})
+
+    def set_my_short_description(self, short_description: str) -> dict[str, Any]:
+        return self._call("setMyShortDescription", {"short_description": short_description})
+
+    def sync_bot_profile(self) -> None:
+        self.set_my_commands()
+        self.set_my_description(TELEGRAM_BOT_DESCRIPTION)
+        self.set_my_short_description(TELEGRAM_BOT_SHORT_DESCRIPTION)
+
 
 class TelegramReviewNotifier:
     def __init__(
@@ -70,6 +144,8 @@ class TelegramReviewNotifier:
         self.admin_chat_id = admin_chat_id
 
     def send_review_alert(self, case: dict[str, Any]) -> None:
+        if not self.repository.get_platform_settings().get("mismatch_alerts_enabled", True):
+            return
         chat_id = case.get("owner_chat_id") or self.admin_chat_id
         if not chat_id:
             return
@@ -102,7 +178,7 @@ class TelegramReviewNotifier:
                 [
                     {
                         "text": "MANUAL CHECK",
-                        "url": f"{self.dashboard_base_url}/cases/{case['case_id']}",
+                        "url": f"{self.dashboard_base_url}/cases?case={case['case_id']}",
                     }
                 ],
             ]

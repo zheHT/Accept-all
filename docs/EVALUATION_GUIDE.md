@@ -1,5 +1,11 @@
 # SDOC Hackathon Evaluation & Scoring Guide
 
+> [!NOTE]
+> **Evaluation vs. Production Architecture Separation**
+> This evaluation guide and its CLI tools (`scripts/eval_inbox.py`, `loader.py`) interact strictly with the isolated `backend.evaluation_adapter` package.
+> They are designed exclusively for benchmark evaluation against the hackathon test harness and ground truth datasets.
+> They are **never deployed to production** and are completely decoupled from the production Cloud Run microservices (`backend.api` and `backend.worker`), Google Cloud Storage, Firestore database, and the Next.js reviewer dashboard.
+
 This guide explains how to evaluate the Maritime Shipping Email Classifier & Triage Agent against the SDOC Hackathon reference dataset (`D:\Downloads\sdoc-hackathon-docker`) and submit predictions to the scoring engine.
 
 ---

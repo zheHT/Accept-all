@@ -4,10 +4,11 @@ import hashlib
 import json
 import logging
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from backend.core.blob_store import BlobStore, LocalBlobStore
 from backend.core.config import Settings
 from backend.core.explainer import CaseExplainer
 from backend.core.repository import CaseRepository
@@ -27,14 +28,37 @@ class KnowledgePublisher:
         explainer: CaseExplainer,
         settings: Settings,
         local_dir: Path | None = None,
+        blobs: BlobStore | None = None,
     ) -> None:
         self.repository = repository
         self.explainer = explainer
         self.settings = settings
         self.local_dir = local_dir or Path(".local-blobs") / "knowledge_base"
+        self.blobs = blobs or LocalBlobStore(self.local_dir.parent)
 
     def aggregate_week_data(self, iso_week: str) -> dict[str, Any]:
-        cases = self.repository.list_cases(limit=200)
+        try:
+            year_text, week_text = iso_week.split("-W", 1)
+            week_start = datetime.fromisocalendar(int(year_text), int(week_text), 1).replace(
+                tzinfo=UTC
+            )
+        except (ValueError, TypeError) as exc:
+            raise ValueError("week must use ISO format YYYY-Www") from exc
+        week_end = week_start + timedelta(days=7)
+
+        def in_requested_week(case: dict[str, Any]) -> bool:
+            created = case.get("created_at")
+            if isinstance(created, str):
+                created = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            if isinstance(created, datetime):
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=UTC)
+                return week_start <= created.astimezone(UTC) < week_end
+            return False
+
+        cases = [
+            case for case in self.repository.list_cases(limit=5000) if in_requested_week(case)
+        ]
         status_counts = Counter(
             (case.get("result") or {}).get("status", "PENDING") for case in cases
         )
@@ -223,8 +247,13 @@ class KnowledgePublisher:
 
     def publish_to_drive_or_local(
         self, title: str, markdown_content: str, filename_prefix: str
-    ) -> tuple[str, str]:
-        """Publishes to Google Docs if credentials available; else writes local files."""
+    ) -> tuple[str, str, str]:
+        """Persist Markdown to the blob store and optionally mirror it to Google Docs."""
+        preview_uri = self.blobs.upload(
+            f"knowledge/{filename_prefix}.md",
+            markdown_content.encode("utf-8"),
+            "text/markdown; charset=utf-8",
+        )
         # Try Google Docs/Drive API first if not in local mode
         if self.settings.app_env.lower() not in {"local", "test"}:
             try:
@@ -255,7 +284,7 @@ class KnowledgePublisher:
                 ).execute()
 
                 logger.info("Published %s to Google Docs: %s", title, drive_url)
-                return doc_id, drive_url
+                return doc_id, drive_url, preview_uri
             except Exception as exc:
                 logger.warning(
                     "Google Drive/Docs API unavailable or failed (%s). "
@@ -263,31 +292,9 @@ class KnowledgePublisher:
                     exc,
                 )
 
-        # Local storage fallback
-        self.local_dir.mkdir(parents=True, exist_ok=True)
-        md_file = self.local_dir / f"{filename_prefix}.md"
-        md_file.write_text(markdown_content, encoding="utf-8")
-
-        # Also write a basic HTML preview
-        html_file = self.local_dir / f"{filename_prefix}.html"
-        style = (
-            "body{font-family:system-ui,sans-serif;margin:40px;max-width:800px;"
-            "line-height:1.6;color:#1e293b;background:#f8fafc;}"
-            "pre{background:#e2e8f0;padding:16px;border-radius:6px;overflow-x:auto;}"
-            "table{border-collapse:collapse;width:100%;margin:16px 0;}"
-            "th,td{border:1px solid #cbd5e1;padding:8px 12px;text-align:left;}"
-            "th{background:#f1f5f9;}"
-        )
-        html_content = (
-            f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{title}</title>"
-            f"<style>{style}</style></head>"
-            f"<body><pre>{markdown_content}</pre></body></html>"
-        )
-        html_file.write_text(html_content, encoding="utf-8")
-
         doc_id = f"local-{filename_prefix}"
         drive_url = f"/api/knowledge-base/preview/{filename_prefix}"
-        return doc_id, drive_url
+        return doc_id, drive_url, preview_uri
 
     def publish_weekly(self, iso_week: str) -> dict[str, Any]:
         aggregated = self.aggregate_week_data(iso_week)
@@ -302,7 +309,7 @@ class KnowledgePublisher:
 
         # Publish Weekly Doc
         title = f"ClassAll Assumptions — {iso_week}"
-        doc_id, drive_url = self.publish_to_drive_or_local(
+        doc_id, drive_url, preview_uri = self.publish_to_drive_or_local(
             title=title,
             markdown_content=weekly_md,
             filename_prefix=f"ClassAll_Assumptions_{iso_week}",
@@ -320,6 +327,7 @@ class KnowledgePublisher:
             "week": iso_week,
             "drive_file_id": doc_id,
             "drive_url": drive_url,
+            "preview_uri": preview_uri,
             "content_hash": content_hash,
             "source_watermark": f"cases-{aggregated['total_cases']}",
             "published_at": datetime.now(UTC).isoformat(),

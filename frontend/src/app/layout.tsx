@@ -4,6 +4,7 @@ import { Sidebar } from "@/components/app-shell/sidebar";
 import { ThemeProvider, THEME_INIT_SCRIPT } from "@/components/theme/theme-provider";
 import { ToastProvider } from "@/components/ui/toast";
 import { WorkspaceCountsProvider } from "@/components/workspace/workspace-counts";
+import { AuthProvider } from "@/components/auth/auth-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -21,15 +22,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen antialiased">
         <ThemeProvider>
           <ToastProvider>
-            <WorkspaceCountsProvider>
-              <Sidebar />
-              <div className="pl-[264px]">
-                <Header />
-                <main className="px-8 py-8">
+            <AuthProvider>
+              <WorkspaceCountsProvider>
+                <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-canvas focus:px-4 focus:py-2">Skip to main content</a>
+                <Sidebar />
+                <div className="pb-20 lg:pl-[264px] lg:pb-0">
+                  <Header />
+                  <main id="main-content" className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
                   <div className="mx-auto max-w-[1360px]">{children}</div>
-                </main>
-              </div>
-            </WorkspaceCountsProvider>
+                  </main>
+                </div>
+              </WorkspaceCountsProvider>
+            </AuthProvider>
           </ToastProvider>
         </ThemeProvider>
       </body>

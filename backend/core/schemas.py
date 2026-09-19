@@ -26,6 +26,7 @@ class ReviewReason(StrEnum):
     MISSING_ATTACHMENT = "missing_attachment"
     UNREADABLE = "unreadable"
     MISSING_VALUE = "missing_value"
+    LOW_CONFIDENCE = "low_confidence"
 
 
 class ProcessingState(StrEnum):
@@ -34,6 +35,12 @@ class ProcessingState(StrEnum):
     PROCESSING = "PROCESSING"
     TERMINAL = "TERMINAL"
     DEAD_LETTER = "DEAD_LETTER"
+
+
+class IngestionState(StrEnum):
+    PENDING = "PENDING"
+    DOCUMENTS_STORED = "DOCUMENTS_STORED"
+    TASK_PUBLISHED = "TASK_PUBLISHED"
 
 
 class ReviewDecision(StrEnum):
@@ -144,6 +151,17 @@ class DraftSendRequest(BaseModel):
     expected_content_hash: str = Field(min_length=64, max_length=64)
 
 
+class PlatformSettingsUpdate(BaseModel):
+    confidence_threshold: float = Field(ge=0.5, le=1.0)
+    mismatch_alerts_enabled: bool
+
+
+class PlatformSettingsView(PlatformSettingsUpdate):
+    low_confidence_requires_review: bool = True
+    missing_value_requires_review: bool = True
+    unreadable_requires_review: bool = True
+
+
 class StoredDocument(BaseModel):
     document_id: str
     filename: str
@@ -182,6 +200,7 @@ class KnowledgeBaseWeekRecord(BaseModel):
     week: str  # e.g. 2026-W38
     drive_file_id: str | None = None
     drive_url: str | None = None
+    preview_uri: str | None = None
     content_hash: str
     source_watermark: str = ""
     published_at: str

@@ -86,6 +86,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         except RefreshError:
             _signal_gmail_reconnect(runtime)
             return {"reconnect_required": True}
+        reconciled = reconcile_recent_gmail(runtime)
         runtime.repository.set_gmail_state(
             {
                 "history_id": watch["historyId"],
@@ -94,7 +95,6 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                 "oauth_error": None,
             }
         )
-        reconciled = reconcile_recent_gmail(runtime)
         return {"history_id": watch["historyId"], "reconciled_cases": len(reconciled)}
 
     @app.get("/api/cron/summary")

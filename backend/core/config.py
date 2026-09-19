@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
+    app_signing_secret: str = "local-development-signing-secret"
     telegram_admin_chat_id: str = ""
     grader_ingest_key: str = ""
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from googleapiclient.errors import HttpError
+
 from backend.core.ingestion import stable_case_id
 from backend.core.runtime import Runtime
 from backend.core.schemas import TERMINAL_STATES
@@ -42,28 +44,29 @@ def process_gmail_notification(runtime: Runtime, notification: dict[str, Any]) -
     state = runtime.repository.get_gmail_state()
 
     if not state or not state.get("history_id"):
+        case_ids = reconcile_recent_gmail(runtime)
         runtime.repository.set_gmail_state(
             {
                 "history_id": latest_history_id,
                 "email_address": notification.get("emailAddress"),
             }
         )
-        return []
+        return case_ids
 
     start_history_id = str(state["history_id"])
     try:
         history = runtime.gmail.history(start_history_id)
-    except Exception as e:
-        if type(e).__name__ == "RefreshError" or "RefreshError" in [b.__name__ for b in type(e).__mro__]:
+    except HttpError as exc:
+        if exc.resp.status not in {404, 410}:
             raise
-        # If history cursor is expired (HTTP 404/410), update cursor to latest
+        case_ids = reconcile_recent_gmail(runtime)
         runtime.repository.set_gmail_state(
             {
                 "history_id": latest_history_id,
                 "email_address": notification.get("emailAddress"),
             }
         )
-        return []
+        return case_ids
 
     message_ids = {
         added["message"]["id"]
@@ -91,8 +94,8 @@ def process_gmail_notification(runtime: Runtime, notification: dict[str, Any]) -
 def reconcile_recent_gmail(runtime: Runtime) -> list[str]:
     """Periodic reconciliation job to recover any missed emails in target Gmail label."""
     label = runtime.settings.gmail_label or "INBOX"
-    query = f"label:{label} newer_than:7d -in:spam -in:trash"
-    messages = runtime.gmail.list_messages(query, max_results=100)
+    query = f"label:{label} newer_than:30d -in:spam -in:trash"
+    messages = runtime.gmail.list_messages(query)
     return [
         case_id
         for item in messages

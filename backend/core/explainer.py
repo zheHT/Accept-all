@@ -37,6 +37,36 @@ class CaseExplainer:
         )
         return response.text.strip()
 
+    def assist(self, question: str) -> str:
+        if not self.enabled:
+            return (
+                "🚢 <b>ClassAll Maritime AI Agent</b>\n\n"
+                "I assist with shipping correspondence triage and document reconciliation "
+                "between Shipping Instructions (SI) and draft Bills of Lading (BL).\n\n"
+                "• Send <code>/newcase</code> to generate a case token.\n"
+                "• Upload documents with caption <code>#TOKEN</code>, then send <code>/submit TOKEN</code>.\n"
+                "• Or ask a question about any case by mentioning its ID (e.g. <code>case-18e47...</code>)."
+            )
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(vertexai=True, project=self.project, location=self.location)
+        system_prompt = (
+            "You are ClassAll AI, an intelligent maritime shipping document triage and verification assistant. "
+            "You assist shipping lines, freight forwarders, and logistics operators in verifying Shipping Instructions (SI) "
+            "against draft Bills of Lading (BL), categorizing shipping correspondence (BL_COMPARISON, SI_REQUEST, INVOICE_QUERY, GENERAL, SPAM), "
+            "and identifying discrepancies across the 7 verified contract fields: shipper, consignee, notify party, "
+            "port of loading (POL), port of discharge (POD), container count, and gross weight. "
+            "Answer clearly and concisely. If the user greets you or asks how to use the bot, guide them on /newcase, "
+            "document uploads with #TOKEN, and /submit TOKEN."
+        )
+        response = client.models.generate_content(
+            model=self.model,
+            contents=f"{system_prompt}\n\nUser Message: {question}",
+            config=types.GenerateContentConfig(temperature=0.2),
+        )
+        return response.text.strip()
+
     @staticmethod
     def _deterministic(evidence: dict[str, Any]) -> str:
         result = evidence.get("result") or {}

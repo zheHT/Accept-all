@@ -68,6 +68,7 @@ SECRETS=(
     "telegram-bot-token"
     "telegram-webhook-secret"
     "grader-ingest-key"
+    "app-signing-secret"
     "gmail-oauth-client-json"
     "gmail-oauth-refresh-token"
     "gmail-address"

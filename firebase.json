@@ -1,9 +1,9 @@
 {
   "hosting": {
     "site": "classall-review-0866395749",
-    "public": "frontend/dist",
+    "public": "frontend/out",
+    "cleanUrls": true,
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-    "rewrites": [{ "source": "**", "destination": "/index.html" }],
     "headers": [
       {
         "source": "**",

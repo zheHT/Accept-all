@@ -1,75 +1,19 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
-
-/** Badge counts shown in the sidebar when the session starts. */
-const INITIAL_UNREAD_EMAILS = 12;
-const INITIAL_PENDING_REVIEWS = 15;
+import { createContext, useContext } from "react";
+import { getDashboard, type CaseSummary } from "@/lib/api";
+import { useLiveQuery } from "@/lib/use-live-query";
 
 interface WorkspaceCountsValue {
-  unreadEmails: number;
+  processing: number;
   pendingReviews: number;
-  /** Opening an email marks it read and drops the Inbox badge. */
-  markEmailRead: (id: string) => void;
-  /** Opening a review case takes it out of the Review Queue badge. */
-  markReviewOpened: (id: string) => void;
-  isEmailRead: (id: string) => boolean;
-  isReviewOpened: (id: string) => boolean;
+  attentionItems: CaseSummary[];
+  refresh: () => Promise<void>;
 }
-
-const WorkspaceCountsContext = createContext<WorkspaceCountsValue>({
-  unreadEmails: INITIAL_UNREAD_EMAILS,
-  pendingReviews: INITIAL_PENDING_REVIEWS,
-  markEmailRead: () => {},
-  markReviewOpened: () => {},
-  isEmailRead: () => false,
-  isReviewOpened: () => false,
-});
-
-export function useWorkspaceCounts() {
-  return useContext(WorkspaceCountsContext);
-}
-
-/**
- * Tracks what the operator has already looked at, so the sidebar badges reflect
- * real progress through the queues instead of staying at a fixed number. Counts
- * are per session; they reset on reload.
- */
+const WorkspaceCountsContext = createContext<WorkspaceCountsValue>({ processing: 0, pendingReviews: 0, attentionItems: [], refresh: async () => {} });
+export function useWorkspaceCounts() { return useContext(WorkspaceCountsContext) }
 export function WorkspaceCountsProvider({ children }: { children: React.ReactNode }) {
-  const [readEmails, setReadEmails] = useState<Set<string>>(() => new Set());
-  const [openedReviews, setOpenedReviews] = useState<Set<string>>(() => new Set());
-
-  const markEmailRead = useCallback((id: string) => {
-    setReadEmails((current) => {
-      if (current.has(id)) return current;
-      const next = new Set(current);
-      next.add(id);
-      return next;
-    });
-  }, []);
-
-  const markReviewOpened = useCallback((id: string) => {
-    setOpenedReviews((current) => {
-      if (current.has(id)) return current;
-      const next = new Set(current);
-      next.add(id);
-      return next;
-    });
-  }, []);
-
-  const value = useMemo<WorkspaceCountsValue>(
-    () => ({
-      unreadEmails: Math.max(0, INITIAL_UNREAD_EMAILS - readEmails.size),
-      pendingReviews: Math.max(0, INITIAL_PENDING_REVIEWS - openedReviews.size),
-      markEmailRead,
-      markReviewOpened,
-      isEmailRead: (id: string) => readEmails.has(id),
-      isReviewOpened: (id: string) => openedReviews.has(id),
-    }),
-    [readEmails, openedReviews, markEmailRead, markReviewOpened],
-  );
-
-  return (
-    <WorkspaceCountsContext.Provider value={value}>{children}</WorkspaceCountsContext.Provider>
-  );
+  const query = useLiveQuery((signal) => getDashboard("week", signal), []);
+  const value = { processing: query.data?.metrics.processing ?? 0, pendingReviews: query.data?.metrics.unresolved ?? 0, attentionItems: query.data?.attention_items ?? [], refresh: query.refresh };
+  return <WorkspaceCountsContext.Provider value={value}>{children}</WorkspaceCountsContext.Provider>;
 }

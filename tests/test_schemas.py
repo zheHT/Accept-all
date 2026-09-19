@@ -1,6 +1,6 @@
 from pydantic import ValidationError
 
-from backend.models.schemas import (
+from backend.evaluation_adapter.schemas import (
     EmailCategory,
     EmailClassification,
     EmailInputPayload,
