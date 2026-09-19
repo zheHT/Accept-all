@@ -24,7 +24,6 @@ sample_submission.json and either score it with score_cli.py (if organizers
 gave you a ground_truth.json) or POST it to the server's /submit.
 """
 import json
-import os
 import urllib.request
 from pathlib import Path
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { STATUS_META } from "@/lib/status";
-import type { OutcomeSlice } from "@/lib/mock-data";
+import type { OutcomeSlice } from "@/lib/dashboard-data";
 
 const SIZE = 236;
 const STROKE = 22;

@@ -6,9 +6,13 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, ChevronRight, SearchX } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { StatusChip } from "@/components/status-chip";
-import { ATTENTION_CASES, TOTAL_OPEN_CASES, type CaseRow } from "@/lib/mock-data";
+import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
+import { getDashboard } from "@/lib/api";
+import { attentionRow } from "@/lib/live-view-models";
+import { type CaseRow } from "@/lib/dashboard-data";
 import type { VerificationStatus } from "@/lib/status";
 import { readParam, writeParam } from "@/lib/url-state";
+import { useLiveQuery } from "@/lib/use-live-query";
 
 type CaseFilter = "all" | Extract<VerificationStatus, "mismatch" | "needs_review" | "failed">;
 
@@ -30,6 +34,11 @@ const FINDING_TONE: Record<CaseRow["status"], string> = {
 export function AttentionTable() {
   const router = useRouter();
   const [filter, setFilter] = useState<CaseFilter>("all");
+  const query = useLiveQuery((signal) => getDashboard("week", signal), []);
+  const attentionCases = useMemo(
+    () => (query.data?.attention_items || []).map(attentionRow),
+    [query.data],
+  );
 
   /** Rows open the full case on the Verification Cases page. */
   const openCase = (row: CaseRow) =>
@@ -51,21 +60,27 @@ export function AttentionTable() {
   const counts = useMemo(() => {
     const byStatus = (status: CaseFilter) =>
       status === "all"
-        ? ATTENTION_CASES.length
-        : ATTENTION_CASES.filter((row) => row.status === status).length;
+        ? attentionCases.length
+        : attentionCases.filter((row) => row.status === status).length;
     return Object.fromEntries(FILTERS.map(({ id }) => [id, byStatus(id)])) as Record<
       CaseFilter,
       number
     >;
-  }, []);
+  }, [attentionCases]);
 
   const rows = useMemo(
-    () => (filter === "all" ? ATTENTION_CASES : ATTENTION_CASES.filter((row) => row.status === filter)),
-    [filter],
+    () => (filter === "all" ? attentionCases : attentionCases.filter((row) => row.status === filter)),
+    [attentionCases, filter],
   );
+
+  if (query.loading && !query.data) return <LoadingState label="Loading attention queue" />;
+  if (query.error && !query.data) {
+    return <ErrorState message={query.error} retry={() => void query.refresh()} />;
+  }
 
   return (
     <section className="glass glass-sheen overflow-hidden">
+      {query.stale && <div className="px-6 pt-4"><StaleNotice /></div>}
       <header className="flex flex-col gap-4 border-b border-line px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">
@@ -119,7 +134,7 @@ export function AttentionTable() {
                 Shipment
               </th>
               <th scope="col" className="px-6 py-3 font-semibold">
-                Route
+                Source context
               </th>
               <th scope="col" className="px-6 py-3 font-semibold">
                 Status
@@ -155,12 +170,10 @@ export function AttentionTable() {
                 </td>
 
                 <td className="border-t border-line px-6 py-4 align-middle">
-                  <span className="tabular flex items-center gap-2 text-[13px] font-medium text-ink-700">
-                    {row.pol}
-                    <ArrowRight className="size-3 text-ink-300" strokeWidth={2.5} />
-                    {row.pod}
+                  <span className="text-[13px] font-medium text-ink-700">Gmail</span>
+                  <span className="mt-1 block max-w-[260px] truncate text-[12px] text-ink-400">
+                    {row.vessel}
                   </span>
-                  <span className="mt-1 block text-[12px] text-ink-400">{row.vessel}</span>
                 </td>
 
                 <td className="border-t border-line px-6 py-4 align-middle">
@@ -209,7 +222,7 @@ export function AttentionTable() {
 
       <footer className="flex items-center justify-between border-t border-line px-6 py-4">
         <span className="text-[12px] text-ink-400">
-          Showing {rows.length} of {TOTAL_OPEN_CASES} open cases
+          Showing {rows.length} of {query.data?.metrics.unresolved ?? rows.length} open cases
         </span>
         <Link
           href="/cases"

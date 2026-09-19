@@ -15,10 +15,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from loader import Inbox
-from backend.agents.classifier_flow import classify_email
+from backend.evaluation_adapter.attachment_sniffer import inspect_attachment
+from backend.evaluation_adapter.classifier_flow import classify_email
+from backend.evaluation_adapter.schemas import EmailCategory, SubmissionItem
 from backend.extraction import DocumentInput, DocumentPairResult, process_document_pair
-from backend.models.schemas import EmailCategory, SubmissionItem
-from backend.utils.attachment_sniffer import inspect_attachment
 
 
 CATEGORY_MAP = {

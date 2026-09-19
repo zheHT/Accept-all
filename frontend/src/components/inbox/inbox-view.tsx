@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, Paperclip, Search, SearchX, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
+import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
 import { useWorkspaceCounts } from "@/components/workspace/workspace-counts";
 import { ClassificationBadge, EmailStatusBadge } from "./badges";
 import { EmailDrawer } from "./email-drawer";
@@ -11,13 +12,13 @@ import { IntakeBreakdown, type IntakeGroup } from "./intake-breakdown";
 import {
   CLASSIFICATION_META,
   EMAIL_STATUS_META,
-  INBOX_EMAILS,
-  INBOX_TOTALS,
-  SYNC_ARRIVALS,
   type EmailClassification,
   type EmailStatus,
   type InboxEmail,
 } from "@/lib/inbox-data";
+import { getCase, getInbox } from "@/lib/api";
+import { inboxDetail, inboxSummary } from "@/lib/live-view-models";
+import { useLiveQuery } from "@/lib/use-live-query";
 
 /** "other_requests" groups the three non-verification, non-spam categories. */
 type TypeFilter = "all" | EmailClassification | "other_requests";
@@ -59,12 +60,10 @@ const SORT_OPTIONS: Array<{ value: SortOrder; label: string }> = [
 export function InboxView() {
   const toast = useToast();
   const { markEmailRead, isEmailRead } = useWorkspaceCounts();
+  const inbox = useLiveQuery((signal) => getInbox(signal), []);
 
-  const [emails, setEmails] = useState<InboxEmail[]>(INBOX_EMAILS);
-  const [totals, setTotals] = useState(INBOX_TOTALS);
-  const [syncing, setSyncing] = useState(false);
+  const [emails, setEmails] = useState<InboxEmail[]>([]);
   const [lastSync, setLastSync] = useState<string | null>(null);
-  const [arrivalIndex, setArrivalIndex] = useState(0);
 
   const [query, setQuery] = useState("");
   const [type, setType] = useState<TypeFilter>("all");
@@ -73,23 +72,42 @@ export function InboxView() {
   const [sort, setSort] = useState<SortOrder>("newest");
   const [selected, setSelected] = useState<InboxEmail | null>(null);
 
+  useEffect(() => {
+    if (inbox.data) setEmails(inbox.data.items.map(inboxSummary));
+  }, [inbox.data]);
+
+  const totals = useMemo(() => ({
+    total: emails.length,
+    checks: emails.filter((email) => email.classification === "document_comparison").length,
+    spam: emails.filter((email) => email.classification === "spam").length,
+    other: emails.filter((email) => OTHER_REQUEST_TYPES.includes(email.classification)).length,
+  }), [emails]);
+
   /** `?email=<id>` opens an email directly, so a colleague can be sent a link. */
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get("email");
-    const match = INBOX_EMAILS.find((email) => email.id === id);
+    const match = emails.find((email) => email.id === id);
     if (match) {
       setSelected(match);
       markEmailRead(match.id);
+      void getCase(match.id).then((detail) => setSelected(inboxDetail(detail))).catch(() => {});
     }
-  }, [markEmailRead]);
+  }, [emails, markEmailRead]);
 
   const openEmail = useCallback(
     (email: InboxEmail) => {
       setSelected(email);
       markEmailRead(email.id);
       window.history.replaceState(null, "", `?email=${email.id}`);
+      void getCase(email.id)
+        .then((detail) => setSelected(inboxDetail(detail)))
+        .catch((error: unknown) => toast({
+          title: "Email details are temporarily unavailable",
+          description: error instanceof Error ? error.message : "Please retry.",
+          tone: "warning",
+        }));
     },
-    [markEmailRead],
+    [markEmailRead, toast],
   );
 
   const closeEmail = useCallback(() => {
@@ -97,52 +115,15 @@ export function InboxView() {
     window.history.replaceState(null, "", window.location.pathname);
   }, []);
 
-  /** Polls the mailbox: new mail is prepended to the list and the totals move. */
-  const sync = useCallback(() => {
-    if (syncing) return;
-    setSyncing(true);
-
-    window.setTimeout(() => {
-      setSyncing(false);
-      const now = new Date();
-      setLastSync(clock(now));
-
-      const arrival = SYNC_ARRIVALS[arrivalIndex];
-      if (!arrival) {
-        toast({
-          title: "Mailbox synced",
-          description: "No new messages since the last check of docs@shipverify.io.",
-          tone: "info",
-        });
-        return;
-      }
-
-      const email: InboxEmail = {
-        ...arrival,
-        receivedDay: "today",
-        receivedTime: clock(now),
-        receivedLabel: `Today, ${clock(now)}`,
-        receivedOrder: 2400 + arrivalIndex,
-      };
-
-      setEmails((current) => [email, ...current]);
-      setArrivalIndex((index) => index + 1);
-      setTotals((current) => ({
-        total: current.total + 1,
-        checks: current.checks + (email.classification === "document_comparison" ? 1 : 0),
-        spam: current.spam + (email.classification === "spam" ? 1 : 0),
-        other:
-          current.other +
-          (OTHER_REQUEST_TYPES.includes(email.classification) ? 1 : 0),
-      }));
-
-      toast({
-        title: "1 new email received",
-        description: `${email.sender} — classified as ${CLASSIFICATION_META[email.classification].label}.`,
-        tone: "success",
-      });
-    }, 1100);
-  }, [arrivalIndex, syncing, toast]);
+  const sync = useCallback(async () => {
+    await inbox.refresh();
+    setLastSync(clock(new Date()));
+    toast({
+      title: "Mailbox refreshed",
+      description: "The latest Gmail-sourced cases are now shown.",
+      tone: "success",
+    });
+  }, [inbox, toast]);
 
   /** The intake panel and the Classification select share one piece of state. */
   const group: IntakeGroup =
@@ -200,16 +181,23 @@ export function InboxView() {
     });
   }, [emails, query, type, status, date, sort]);
 
+  if (inbox.loading && !inbox.data) return <LoadingState label="Loading inbox" />;
+  if (inbox.error && !inbox.data) {
+    return <ErrorState message={inbox.error} retry={() => void inbox.refresh()} />;
+  }
+
   return (
     <>
       <IntakeBreakdown
         totals={totals}
         active={group}
         onSelect={selectGroup}
-        syncing={syncing}
+        syncing={inbox.loading}
         lastSync={lastSync}
-        onSync={sync}
+        onSync={() => void sync()}
       />
+
+      {inbox.stale && <StaleNotice />}
 
       <section className="glass glass-sheen flex flex-col gap-3 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">

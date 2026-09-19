@@ -1,28 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Columns2,
   ExternalLink,
   FileText,
   Pencil,
   ScanLine,
   ShieldQuestion,
   TriangleAlert,
+  Send,
+  Save,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
+import { useAuth } from "@/components/auth/auth-provider";
+import type { CaseDetail } from "@/lib/api";
 import { DocumentPreview, type PreviewDocument } from "@/components/ui/document-preview";
-import { CURRENT_USER } from "@/lib/user";
+import { DualDocumentPreview } from "@/components/ui/dual-document-preview";
 import {
+  type ReviewCase,
+  type ReviewDecision,
+  type DocumentEvidence,
   REVIEW_REASON_LABELS,
   REVIEW_STATUS_META,
   VERIFICATION_THRESHOLD,
-  type DocumentEvidence,
-  type ReviewCase,
-  type ReviewDecision,
 } from "@/lib/review-data";
 
 type DecisionType = ReviewDecision["type"];
@@ -47,17 +54,32 @@ const WORKFLOW_STEPS = [
  */
 export function ReviewDetail({
   reviewCase,
+  caseDetail,
   onSubmit,
   onBack,
+  onSaveDraft,
+  onSendDraft,
 }: {
   reviewCase: ReviewCase;
+  caseDetail: CaseDetail | null;
   onSubmit: (decision: ReviewDecision) => void;
   onBack: () => void;
+  onSaveDraft: (subject: string, body: string) => void;
+  onSendDraft: () => void;
 }) {
   const toast = useToast();
+  const { user } = useAuth();
   const [decisionType, setDecisionType] = useState<DecisionType | null>(null);
+  const [dualPreview, setDualPreview] = useState(false);
   const [correctedValue, setCorrectedValue] = useState("");
   const [notes, setNotes] = useState("");
+  const [draftSubject, setDraftSubject] = useState("");
+  const [draftBody, setDraftBody] = useState("");
+
+  useEffect(() => {
+    setDraftSubject(caseDetail?.draft?.subject || "");
+    setDraftBody(caseDetail?.draft?.body || "");
+  }, [caseDetail?.draft?.body, caseDetail?.draft?.subject]);
 
   const aiValue = reviewCase.bl.extractedValue;
   const confidencePct = Math.round(reviewCase.confidence * 100);
@@ -80,7 +102,7 @@ export function ReviewDetail({
       type: decisionType,
       value,
       notes: notes.trim(),
-      reviewer: CURRENT_USER.name,
+      reviewer: user?.displayName || user?.email || "Reviewer",
       at: formatStamp(new Date()),
     });
   };
@@ -159,6 +181,72 @@ export function ReviewDetail({
             )}
           </div>
 
+          {resolved.type !== "confirm" && (
+            <div className="border-t border-line px-6 py-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="eyebrow">Gmail correction draft</p>
+                  <p className="mt-1.5 text-[12.5px] text-ink-500">
+                    Review the generated message before sending it to the original sender.
+                  </p>
+                </div>
+                {caseDetail?.draft && (
+                  <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-500 ring-1 ring-inset ring-line">
+                    {caseDetail.draft.state}
+                  </span>
+                )}
+              </div>
+
+              {caseDetail?.draft ? (
+                <div className="mt-4 flex flex-col gap-3">
+                  <label>
+                    <span className="eyebrow">Subject</span>
+                    <input
+                      value={draftSubject}
+                      onChange={(event) => setDraftSubject(event.target.value)}
+                      disabled={caseDetail.draft.state === "SENT"}
+                      className="field-glass mt-2 px-3 py-2.5"
+                    />
+                  </label>
+                  <label>
+                    <span className="eyebrow">Message</span>
+                    <textarea
+                      value={draftBody}
+                      onChange={(event) => setDraftBody(event.target.value)}
+                      disabled={caseDetail.draft.state === "SENT"}
+                      rows={8}
+                      className="field-glass mt-2 resize-y px-3 py-2.5 leading-relaxed"
+                    />
+                  </label>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      className="btn-glass"
+                      disabled={caseDetail.draft.state === "SENT"}
+                      onClick={() => onSaveDraft(draftSubject, draftBody)}
+                    >
+                      <Save className="size-4" />
+                      Save draft
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      disabled={caseDetail.draft.state === "SENT"}
+                      onClick={onSendDraft}
+                    >
+                      <Send className="size-4" />
+                      {caseDetail.draft.state === "SENT" ? "Sent" : "Send correction"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-4 rounded-xl border border-line bg-surface/60 p-4 text-[12.5px] text-ink-500">
+                  The correction draft is being prepared. Refresh the case if it does not appear shortly.
+                </p>
+              )}
+            </div>
+          )}
+
           <footer className="flex items-center justify-between gap-3 border-t border-line bg-surface/50 px-6 py-4">
             <span className="text-[12px] text-ink-400">
               Status: {REVIEW_STATUS_META.resolved.label}
@@ -212,7 +300,17 @@ export function ReviewDetail({
       </section>
 
       <section className="flex flex-col gap-3">
-        <p className="eyebrow">Source documents</p>
+        <div className="flex items-center justify-between">
+          <p className="eyebrow">Source documents</p>
+          <button
+            type="button"
+            onClick={() => setDualPreview(true)}
+            className="btn-glass px-3 py-1.5 text-[12px]"
+          >
+            <Columns2 className="size-3.5" strokeWidth={2} />
+            Compare Side by Side
+          </button>
+        </div>
         <div className="grid gap-4 lg:grid-cols-2">
           <EvidencePanel
             title="Shipping Instruction"
@@ -229,6 +327,13 @@ export function ReviewDetail({
             tone="problem"
           />
         </div>
+        <DualDocumentPreview
+          si={reviewCase.si}
+          bl={reviewCase.bl}
+          problemField={reviewCase.problemField}
+          open={dualPreview}
+          onClose={() => setDualPreview(false)}
+        />
       </section>
 
       <section className="glass glass-sheen p-6">
@@ -258,7 +363,7 @@ export function ReviewDetail({
             active={decisionType === "confirm"}
             onSelect={() => setDecisionType("confirm")}
             icon={CheckCircle2}
-            title="Confirm Result"
+            title="Approve result"
             description={
               aiValue
                 ? `The extracted information is correct — record “${aiValue}” as the B/L value.`
@@ -271,8 +376,8 @@ export function ReviewDetail({
             active={decisionType === "correct"}
             onSelect={() => setDecisionType("correct")}
             icon={Pencil}
-            title="Correct Value"
-            description="Enter the value that actually appears on the Bill of Lading."
+            title="Decline and propose correction"
+            description="Decline the current result and record the value that should appear in the correction draft."
           >
             <input
               type="text"
@@ -289,8 +394,8 @@ export function ReviewDetail({
             active={decisionType === "unreadable"}
             onSelect={() => setDecisionType("unreadable")}
             icon={ScanLine}
-            title="Mark as Unreadable"
-            description="The source document cannot be reliably interpreted. A corrected copy will be requested from the sender."
+            title="Decline as unreadable"
+            description="Decline the current result because the source cannot be interpreted. A correction draft will be prepared."
           />
         </div>
 
@@ -330,7 +435,7 @@ export function ReviewDetail({
               onClick={submit}
               className={cn("btn-primary", !canSubmit && "cursor-not-allowed opacity-45")}
             >
-              Submit Review
+              {decisionType === "confirm" ? "Approve" : "Decline"}
               <ArrowRight className="size-4" strokeWidth={2.25} />
             </button>
           </div>
@@ -390,8 +495,19 @@ function EvidencePanel({
   problemField: string;
   tone: "neutral" | "problem";
 }) {
+  const [expanded, setExpanded] = useState(false);
   const [preview, setPreview] = useState<PreviewDocument | null>(null);
   const problem = tone === "problem" && evidence.extractedValue === null;
+
+  const fullLines = evidence.fullLines?.length ? evidence.fullLines : evidence.snippet;
+  const displayLines = expanded ? fullLines : evidence.snippet;
+  const hasMore = fullLines.length > evidence.snippet.length;
+  const problemSet = new Set(evidence.problemLines ?? []);
+
+  // Merge the original highlightIndex into the set when collapsed
+  if (!expanded && evidence.highlightIndex >= 0) {
+    problemSet.add(evidence.highlightIndex);
+  }
 
   return (
     <article
@@ -400,14 +516,21 @@ function EvidencePanel({
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="flex items-center gap-2">
-            <span className="rounded bg-gradient-to-b from-brand-500 to-brand-700 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-white">
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-white",
+                problem
+                  ? "bg-gradient-to-b from-review-500 to-review-700"
+                  : "bg-gradient-to-b from-brand-500 to-brand-700",
+              )}
+            >
               {role}
             </span>
             <span className="text-[14px] font-semibold tracking-tight text-ink-900">{title}</span>
           </p>
           <p className="mt-1.5 flex items-center gap-1.5 text-[12.5px] text-ink-500">
             <FileText className="size-3.5 text-ink-400" strokeWidth={2} />
-            {evidence.name} · {evidence.pages} pages
+            {evidence.name} · {evidence.pages} page{evidence.pages === 1 ? "" : "s"}
             {evidence.scanned && (
               <span className="inline-flex items-center gap-1 rounded bg-review-50 px-1.5 py-0.5 text-[10.5px] font-medium text-review-700 ring-1 ring-inset ring-review-200">
                 <ScanLine className="size-3" strokeWidth={2.25} />
@@ -424,8 +547,8 @@ function EvidencePanel({
               role,
               pages: evidence.pages,
               scanned: evidence.scanned,
-              lines: evidence.snippet,
-              problemLines: problem ? [evidence.highlightIndex] : [],
+              lines: fullLines,
+              problemLines: [...problemSet],
             })
           }
           className="btn-glass shrink-0 px-2.5 py-1.5 text-[12px]"
@@ -435,22 +558,52 @@ function EvidencePanel({
         </button>
       </div>
 
-      <pre className="mt-4 overflow-x-auto rounded-xl border border-line bg-surface/70 p-3 font-mono text-[11.5px] leading-relaxed text-ink-700">
-        {evidence.snippet.map((line, index) => (
-          <span
-            key={index}
-            className={cn(
-              "block rounded px-1",
-              index === evidence.highlightIndex &&
-                (problem
-                  ? "bg-review-50 font-semibold text-review-700 ring-1 ring-inset ring-review-200"
-                  : "bg-brand-50 font-semibold text-brand-700 ring-1 ring-inset ring-brand-200"),
-            )}
-          >
-            {line}
-          </span>
-        ))}
+      <pre
+        className={cn(
+          "mt-4 overflow-x-auto rounded-xl border border-line bg-surface/70 p-3 font-mono text-[11.5px] leading-relaxed text-ink-700",
+          expanded && "max-h-[400px] overflow-y-auto",
+        )}
+      >
+        {displayLines.map((line, index) => {
+          const highlighted = expanded
+            ? problemSet.has(index)
+            : index === evidence.highlightIndex;
+          return (
+            <span
+              key={index}
+              className={cn(
+                "block rounded px-1",
+                highlighted &&
+                  (problem
+                    ? "bg-review-50 font-semibold text-review-700 ring-1 ring-inset ring-review-200"
+                    : "bg-brand-50 font-semibold text-brand-700 ring-1 ring-inset ring-brand-200"),
+              )}
+            >
+              {line || " "}
+            </span>
+          );
+        })}
       </pre>
+
+      {hasMore && (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="mt-2 flex items-center gap-1.5 self-start rounded-lg px-2.5 py-1.5 text-[11.5px] font-medium text-brand-600 transition-colors hover:bg-brand-50"
+        >
+          {expanded ? (
+            <>
+              <ChevronUp className="size-3.5" strokeWidth={2} />
+              Show less
+            </>
+          ) : (
+            <>
+              <ChevronDown className="size-3.5" strokeWidth={2} />
+              Show full document ({fullLines.length} lines)
+            </>
+          )}
+        </button>
+      )}
 
       <p className="mt-auto pt-4 text-[12.5px]">
         <span className="text-ink-400">{problemField} read as: </span>

@@ -3,7 +3,28 @@
 import { useEffect, useRef, useState } from "react";
 import { CalendarDays, Check, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { PERIODS, PERIOD_ORDER, type Period } from "@/lib/mock-data";
+import { PERIOD_ORDER, type Period } from "@/lib/dashboard-data";
+
+function periodOption(period: Period) {
+  const now = new Date();
+  const format = (date: Date) => new Intl.DateTimeFormat("en-MY", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "Asia/Kuala_Lumpur",
+  }).format(date);
+  if (period === "day") return { label: "Today", rangeLabel: format(now) };
+  if (period === "month") return {
+    label: "This month",
+    rangeLabel: new Intl.DateTimeFormat("en-MY", { month: "long", year: "numeric", timeZone: "Asia/Kuala_Lumpur" }).format(now),
+  };
+  const day = now.getDay() || 7;
+  const start = new Date(now);
+  start.setDate(now.getDate() - day + 1);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { label: "This week", rangeLabel: `${format(start)} – ${format(end)}` };
+}
 
 /** Day / week / month switcher. Selecting a range re-reads every chart figure. */
 export function PeriodMenu({
@@ -34,7 +55,7 @@ export function PeriodMenu({
     };
   }, [open]);
 
-  const current = PERIODS[value];
+  const current = periodOption(value);
 
   return (
     <div ref={container} className="relative">
@@ -62,7 +83,7 @@ export function PeriodMenu({
           className="glass-solid absolute right-0 top-[calc(100%+8px)] z-40 w-60 overflow-hidden p-1.5"
         >
           {PERIOD_ORDER.map((id) => {
-            const period = PERIODS[id];
+            const period = periodOption(id);
             const active = id === value;
             return (
               <button

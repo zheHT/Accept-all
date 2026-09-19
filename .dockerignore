@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+.pytest_cache
+.ruff_cache
+.next
+frontend
+data
+tests
+docs
+scripts
+*.md
+.env*
+submission*.json
+__pycache__
+*.pyc

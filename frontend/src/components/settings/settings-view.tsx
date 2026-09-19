@@ -1,10 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { Bell, Mail, Moon, Palette, ScanLine, ShieldCheck, Sun } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Bell, ExternalLink, Mail, Moon, Palette, ScanLine, ShieldCheck, Sun } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
 import { useTheme, type ThemeChoice } from "@/components/theme/theme-provider";
+import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
+import { getSettings, saveSettings, startGmailOAuth } from "@/lib/api";
+import { formatDate } from "@/lib/format";
+import { useLiveQuery } from "@/lib/use-live-query";
 
 const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; icon: typeof Sun }> = [
   { value: "light", label: "Light", icon: Sun },
@@ -16,16 +20,46 @@ const THRESHOLDS = ["75", "80", "85", "90", "95"];
 export function SettingsView() {
   const toast = useToast();
   const { theme, mounted, setTheme } = useTheme();
+  const settings = useLiveQuery((signal) => getSettings(signal), []);
 
   const [threshold, setThreshold] = useState("85");
-  const [routeLowConfidence, setRouteLowConfidence] = useState(true);
-  const [reviewScans, setReviewScans] = useState(true);
   const [mismatchAlerts, setMismatchAlerts] = useState(true);
-  const [reviewDigest, setReviewDigest] = useState(false);
-  const [syncInterval, setSyncInterval] = useState("5");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!settings.data) return;
+    setThreshold(String(Math.round(settings.data.confidence_threshold * 100)));
+    setMismatchAlerts(settings.data.mismatch_alerts_enabled);
+  }, [settings.data]);
+
+  if (settings.loading && !settings.data) return <LoadingState label="Loading operational settings" />;
+  if (settings.error && !settings.data) {
+    return <ErrorState message={settings.error} retry={() => void settings.refresh()} />;
+  }
+
+  const persist = async (nextThreshold: string, nextAlerts: boolean) => {
+    setSaving(true);
+    try {
+      await saveSettings({
+        confidence_threshold: Number(nextThreshold) / 100,
+        mismatch_alerts_enabled: nextAlerts,
+      });
+      await settings.refresh();
+      toast({ title: "Operational settings saved", tone: "success" });
+    } catch (error) {
+      toast({
+        title: "Settings were not saved",
+        description: error instanceof Error ? error.message : "Please retry.",
+        tone: "warning",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-5">
+      {settings.stale && <StaleNotice />}
       <Panel
         icon={Palette}
         title="Appearance"
@@ -89,13 +123,11 @@ export function SettingsView() {
           <select
             value={threshold}
             onChange={(event) => {
-              setThreshold(event.target.value);
-              toast({
-                title: `Threshold set to ${event.target.value}%`,
-                description: "New cases will use this confidence level from the next run.",
-                tone: "success",
-              });
+              const next = event.target.value;
+              setThreshold(next);
+              void persist(next, mismatchAlerts);
             }}
+            disabled={saving}
             className="field-glass tabular w-auto cursor-pointer px-3 py-2 font-medium"
           >
             {THRESHOLDS.map((value) => (
@@ -107,40 +139,27 @@ export function SettingsView() {
         </Row>
 
         <Row
-          title="Route low-confidence cases to Human Review"
-          detail="Never guess a value: uncertain extractions go to a person."
+          title="Low-confidence values require Human Review"
+          detail="Fixed safety policy: uncertain extractions always go to a person."
         >
           <Switch
-            label="Route low-confidence cases to Human Review"
-            checked={routeLowConfidence}
-            onChange={(next) => {
-              setRouteLowConfidence(next);
-              toast({
-                title: next ? "Low-confidence routing on" : "Low-confidence routing off",
-                description: next
-                  ? "Uncertain cases will continue to appear in the Review Queue."
-                  : "Uncertain cases will be marked Mismatch instead. Not recommended.",
-                tone: next ? "success" : "warning",
-              });
-            }}
+            label="Low-confidence values require Human Review"
+            checked
+            disabled
+            onChange={() => {}}
           />
         </Row>
 
         <Row
-          title="Always review scanned documents"
-          detail="Treat OCR output as unverified even when confidence is high."
+          title="Missing and unreadable values require review"
+          detail="Fixed safety policy: missing or unreadable values can never be auto-approved."
           icon={ScanLine}
         >
           <Switch
-            label="Always review scanned documents"
-            checked={reviewScans}
-            onChange={(next) => {
-              setReviewScans(next);
-              toast({
-                title: next ? "Scanned documents will be reviewed" : "Scanned documents auto-decided",
-                tone: next ? "success" : "warning",
-              });
-            }}
+            label="Missing and unreadable values require review"
+            checked
+            disabled
+            onChange={() => {}}
           />
         </Row>
       </Panel>
@@ -150,24 +169,18 @@ export function SettingsView() {
         title="Mailbox connection"
         description="The inbox ShipVerify watches for shipping documents."
       >
-        <Row title="Sync interval" detail="How often the mailbox is polled for new messages.">
-          <select
-            value={syncInterval}
-            onChange={(event) => {
-              setSyncInterval(event.target.value);
-              toast({
-                title: `Sync interval set to ${event.target.value} minutes`,
-                tone: "success",
-              });
-            }}
-            className="field-glass tabular w-auto cursor-pointer px-3 py-2 font-medium"
+        <Row
+          title={settings.data?.gmail.address || "Gmail account"}
+          detail={`OAuth: ${settings.data?.gmail.oauth_status || "not connected"} · Watch: ${settings.data?.gmail.watch_expiration ? formatDate(settings.data.gmail.watch_expiration) : "not active"}`}
+        >
+          <button
+            type="button"
+            className="btn-glass"
+            onClick={() => void startGmailOAuth().then(({ authorization_url }) => window.location.assign(authorization_url)).catch((error: unknown) => toast({ title: "Could not start Gmail connection", description: error instanceof Error ? error.message : "Please retry.", tone: "warning" }))}
           >
-            {["1", "5", "15", "30"].map((value) => (
-              <option key={value} value={value}>
-                Every {value} min
-              </option>
-            ))}
-          </select>
+            <ExternalLink className="size-4" />
+            {settings.data?.gmail.oauth_status === "connected" ? "Reconnect" : "Connect Gmail"}
+          </button>
         </Row>
       </Panel>
 
@@ -181,21 +194,9 @@ export function SettingsView() {
             checked={mismatchAlerts}
             onChange={(next) => {
               setMismatchAlerts(next);
-              toast({ title: next ? "Mismatch alerts on" : "Mismatch alerts off", tone: "info" });
+              void persist(threshold, next);
             }}
-          />
-        </Row>
-        <Row
-          title="Daily review digest"
-          detail="One summary each morning of everything waiting in the Review Queue."
-        >
-          <Switch
-            label="Daily review digest"
-            checked={reviewDigest}
-            onChange={(next) => {
-              setReviewDigest(next);
-              toast({ title: next ? "Daily digest on" : "Daily digest off", tone: "info" });
-            }}
+            disabled={saving}
           />
         </Row>
       </Panel>
@@ -259,10 +260,12 @@ function Switch({
   label,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <span className="inline-flex items-center gap-2.5">
@@ -280,9 +283,10 @@ function Switch({
         role="switch"
         aria-checked={checked}
         aria-label={label}
+        disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cn(
-          "relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200",
+          "relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-60",
           checked
             ? "bg-gradient-to-r from-brand-500 to-brand-700"
             : "bg-canvas ring-1 ring-inset ring-line-strong",

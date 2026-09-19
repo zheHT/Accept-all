@@ -1,14 +1,14 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertOctagon,
   Bell,
-  CheckCheck,
   LogOut,
   Moon,
   Settings,
+  RefreshCw,
   Sun,
   TriangleAlert,
   UserRound,
@@ -18,7 +18,10 @@ import { cn } from "@/lib/cn";
 import { useDismiss } from "@/lib/use-dismiss";
 import { useToast } from "@/components/ui/toast";
 import { useTheme } from "@/components/theme/theme-provider";
-import { CURRENT_USER } from "@/lib/user";
+import { useAuth } from "@/components/auth/auth-provider";
+import { getDashboard } from "@/lib/api";
+import { fieldLabel, relativeTime } from "@/lib/live-view-models";
+import { useLiveQuery } from "@/lib/use-live-query";
 
 interface Notification {
   id: string;
@@ -28,33 +31,6 @@ interface Notification {
   tone: "mismatch" | "review" | "failed";
   href: string;
 }
-
-const NOTIFICATIONS: Notification[] = [
-  {
-    id: "n1",
-    title: "Container count mismatch",
-    detail: "SHP-1023 — SI states 3 containers, B/L states 4",
-    time: "8 min ago",
-    tone: "mismatch",
-    href: "/cases?case=1023",
-  },
-  {
-    id: "n2",
-    title: "Human review required",
-    detail: "SHP-1022 — Notify Party could not be extracted from the B/L",
-    time: "12 min ago",
-    tone: "review",
-    href: "/review?case=1022",
-  },
-  {
-    id: "n3",
-    title: "Processing failed",
-    detail: "SHP-1026 — scanned B/L could not be read",
-    time: "5 min ago",
-    tone: "failed",
-    href: "/cases?case=1026",
-  },
-];
 
 const TONE: Record<Notification["tone"], { icon: typeof Bell; tile: string }> = {
   mismatch: {
@@ -71,15 +47,38 @@ const TONE: Record<Notification["tone"], { icon: typeof Bell; tile: string }> = 
 export function Header() {
   const router = useRouter();
   const toast = useToast();
+  const { user, signOut } = useAuth();
   const [openMenu, setOpenMenu] = useState<"none" | "notifications" | "user">("none");
-  const [unread, setUnread] = useState(NOTIFICATIONS.length);
+  const dashboard = useLiveQuery((signal) => getDashboard("week", signal), []);
+  const notifications = useMemo<Notification[]>(() => (
+    (dashboard.data?.attention_items || []).slice(0, 6).map((item) => {
+      const failed = item.processing_state === "DEAD_LETTER";
+      const review = item.status === "NEEDS_REVIEW";
+      const fields = [...new Set([...item.defect_fields, ...item.low_confidence_fields])].map(fieldLabel);
+      return {
+        id: item.case_id,
+        title: failed ? "Processing failed" : review ? "Human review required" : "Document mismatch",
+        detail: `${item.subject || item.case_id}${fields.length ? ` · ${fields.join(", ")}` : ""}`,
+        time: relativeTime(item.created_at),
+        tone: failed ? "failed" : review ? "review" : "mismatch",
+        href: review ? `/review?case=${encodeURIComponent(item.case_id)}` : `/cases?case=${encodeURIComponent(item.case_id)}`,
+      };
+    })
+  ), [dashboard.data]);
 
   const close = useCallback(() => setOpenMenu("none"), []);
   const shellRef = useDismiss<HTMLDivElement>(openMenu !== "none", close);
+  if (!user) return null;
+  const displayName = user.displayName || user.email || "Reviewer";
+  const initials = displayName
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
 
   const openNotification = (notification: Notification) => {
     close();
-    setUnread((count) => Math.max(0, count - 1));
     router.push(notification.href);
   };
 
@@ -107,7 +106,7 @@ export function Header() {
             onClick={() =>
               setOpenMenu((current) => (current === "notifications" ? "none" : "notifications"))
             }
-            aria-label={`Notifications (${unread} unread)`}
+            aria-label={`Unresolved cases (${notifications.length})`}
             aria-expanded={openMenu === "notifications"}
             className={cn(
               "relative grid size-9 place-items-center rounded-xl text-ink-500 transition-colors hover:bg-surface/80 hover:text-ink-900",
@@ -115,9 +114,9 @@ export function Header() {
             )}
           >
             <Bell className="size-[18px]" strokeWidth={2} />
-            {unread > 0 && (
+            {notifications.length > 0 && (
               <span className="absolute right-1.5 top-1.5 grid min-w-4 place-items-center rounded-full bg-mismatch-500 px-1 text-[9px] font-bold leading-4 text-white ring-2 ring-surface">
-                {unread}
+                {notifications.length}
               </span>
             )}
           </button>
@@ -125,21 +124,18 @@ export function Header() {
           {openMenu === "notifications" && (
             <div className="glass-solid absolute right-0 top-[calc(100%+10px)] z-40 w-[380px] overflow-hidden">
               <div className="flex items-center justify-between border-b border-line px-4 py-3">
-                <p className="text-[13px] font-semibold text-ink-900">Notifications</p>
+                <p className="text-[13px] font-semibold text-ink-900">Unresolved cases</p>
                 <button
                   type="button"
-                  onClick={() => {
-                    setUnread(0);
-                    toast({ title: "All notifications marked as read", tone: "success" });
-                  }}
+                  onClick={() => void dashboard.refresh()}
                   className="btn-quiet"
                 >
-                  <CheckCheck className="size-3.5" strokeWidth={2.25} />
-                  Mark all read
+                  <RefreshCw className={cn("size-3.5", dashboard.loading && "animate-spin")} strokeWidth={2.25} />
+                  Refresh
                 </button>
               </div>
               <ul className="max-h-[320px] overflow-y-auto">
-                {NOTIFICATIONS.map((notification) => {
+                {notifications.map((notification) => {
                   const tone = TONE[notification.tone];
                   const Icon = tone.icon;
                   return (
@@ -172,6 +168,11 @@ export function Header() {
                     </li>
                   );
                 })}
+                {!dashboard.loading && notifications.length === 0 && (
+                  <li className="px-4 py-8 text-center text-[12.5px] text-ink-400">
+                    No unresolved cases.
+                  </li>
+                )}
               </ul>
             </div>
           )}
@@ -191,19 +192,19 @@ export function Header() {
             )}
           >
             <span className="grid size-9 place-items-center rounded-full bg-gradient-to-br from-brand-400 to-brand-700 text-[13px] font-semibold text-white shadow-brand">
-              {CURRENT_USER.initials}
+              {initials}
             </span>
             <span className="hidden flex-col items-start leading-tight md:flex">
-              <span className="text-[13px] font-semibold text-ink-900">{CURRENT_USER.name}</span>
-              <span className="text-[11px] text-ink-400">{CURRENT_USER.role}</span>
+              <span className="text-[13px] font-semibold text-ink-900">{displayName}</span>
+              <span className="text-[11px] text-ink-400">Reviewer</span>
             </span>
           </button>
 
           {openMenu === "user" && (
             <div className="glass-solid absolute right-0 top-[calc(100%+10px)] z-40 w-60 overflow-hidden p-1.5">
               <div className="px-2.5 py-2">
-                <p className="text-[13px] font-semibold text-ink-900">{CURRENT_USER.name}</p>
-                <p className="mt-0.5 truncate text-[11.5px] text-ink-400">{CURRENT_USER.email}</p>
+                <p className="text-[13px] font-semibold text-ink-900">{displayName}</p>
+                <p className="mt-0.5 truncate text-[11.5px] text-ink-400">{user.email}</p>
               </div>
               <div className="my-1 h-px bg-line" />
               <MenuItem
@@ -231,11 +232,7 @@ export function Header() {
                 label="Sign out"
                 onClick={() => {
                   close();
-                  toast({
-                    title: "Sign out",
-                    description: "Session handling is not part of this prototype.",
-                    tone: "info",
-                  });
+                  void signOut();
                 }}
               />
             </div>

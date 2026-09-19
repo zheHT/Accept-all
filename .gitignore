@@ -9,10 +9,21 @@ node_modules/
 *.tsbuildinfo
 .env
 .env.local
+/frontend/.env.production
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
-data
-submission.json
-.env
+.venv/
+scripts/seed_demo_cases.py
+# Generated email corpus, binary document fixtures, and evaluation data
+/data/attachments/
+/data/inbox/
+/data/*.json
+/data_v2/
+submission*.json
+test_sub*.json
+.local-blobs/
+*.sqlite3
+*.db
+*.parquet

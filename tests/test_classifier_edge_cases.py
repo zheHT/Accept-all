@@ -10,9 +10,7 @@ Covers 8 critical failure points:
 7. Zero-Byte or Empty Attachments
 8. Strict Output Schema Enforcement & Markdown Code Fence Stripping
 """
-import io
 import json
-import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -26,17 +24,15 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from backend.agents.classifier_flow import (
-    classify_email,
+from backend.evaluation_adapter.attachment_sniffer import inspect_attachment
+from backend.evaluation_adapter.classifier_flow import (
     _check_missing_attachments,
+    classify_email,
 )
-from backend.main import app
-from backend.models.schemas import (
+from backend.evaluation_adapter.main import app
+from backend.evaluation_adapter.schemas import (
     EmailCategory,
-    EmailClassification,
-    EmailInputPayload,
 )
-from backend.utils.attachment_sniffer import MAX_CHARS, inspect_attachment
 
 
 # --------------------------------------------------------------------------
@@ -45,7 +41,7 @@ from backend.utils.attachment_sniffer import MAX_CHARS, inspect_attachment
 @pytest.fixture
 def mock_gemini():
     """Mock fixture for google.genai Client preventing live external network calls."""
-    with patch("backend.agents.classifier_flow.genai.Client") as mock_cls, \
+    with patch("backend.evaluation_adapter.classifier_flow.genai.Client") as mock_cls, \
          patch.dict("os.environ", {"GEMINI_API_KEY": "AIzaSy_mock_api_key_test_12345"}):
         mock_instance = MagicMock()
         mock_cls.return_value = mock_instance

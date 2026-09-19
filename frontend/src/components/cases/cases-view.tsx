@@ -7,52 +7,19 @@ import { cn } from "@/lib/cn";
 import { StatusChip } from "@/components/status-chip";
 import { StatBar, type StatSegment } from "@/components/ui/stat-bar";
 import { useToast } from "@/components/ui/toast";
+import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
 import { CaseDrawer } from "./case-drawer";
-import { CASE_TOTALS, VERIFICATION_CASES, type VerificationCase } from "@/lib/case-data";
+import { type VerificationCase } from "@/lib/case-data";
 import { type VerificationStatus } from "@/lib/status";
 import { readParam, writeParam } from "@/lib/url-state";
+import { ApiError, getCase, getCases, retryCase as retryApiCase } from "@/lib/api";
+import { caseDetail, caseSummary } from "@/lib/live-view-models";
+import { useLiveQuery } from "@/lib/use-live-query";
 
 type ResultFilter = "all" | VerificationStatus;
 type WorkflowFilter = "all" | "open" | "in_review" | "resolved";
 type DateFilter = "all" | "today" | "week";
 type SortOrder = "newest" | "oldest";
-
-const share = (value: number) => Math.round((value / CASE_TOTALS.all) * 100);
-
-const SUMMARY_SEGMENTS: StatSegment[] = [
-  {
-    id: "all",
-    label: "All Cases",
-    value: CASE_TOTALS.all,
-    support: "Verification cases",
-    accent: "bg-brand-500",
-    share: 100,
-  },
-  {
-    id: "matched",
-    label: "Matched",
-    value: CASE_TOTALS.matched,
-    support: "No mismatch detected",
-    accent: "bg-matched-500",
-    share: share(CASE_TOTALS.matched),
-  },
-  {
-    id: "mismatch",
-    label: "Mismatch",
-    value: CASE_TOTALS.mismatch,
-    support: "Discrepancy detected",
-    accent: "bg-mismatch-500",
-    share: share(CASE_TOTALS.mismatch),
-  },
-  {
-    id: "needs_review",
-    label: "Needs Review",
-    value: CASE_TOTALS.needsReview,
-    support: "Human verification required",
-    accent: "bg-review-500",
-    share: share(CASE_TOTALS.needsReview),
-  },
-];
 
 const RESULT_OPTIONS: Array<{ value: ResultFilter; label: string }> = [
   { value: "all", label: "All Results" },
@@ -90,8 +57,9 @@ const ACTION_LABEL = {
 export function CasesView() {
   const router = useRouter();
   const toast = useToast();
+  const liveCases = useLiveQuery((signal) => getCases(signal), []);
 
-  const [cases, setCases] = useState<VerificationCase[]>(VERIFICATION_CASES);
+  const [cases, setCases] = useState<VerificationCase[]>([]);
   const [result, setResult] = useState<ResultFilter>("all");
   const [workflow, setWorkflow] = useState<WorkflowFilter>("all");
   const [date, setDate] = useState<DateFilter>("all");
@@ -99,17 +67,26 @@ export function CasesView() {
   const [query, setQuery] = useState("");
   const [openCaseId, setOpenCaseId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (liveCases.data) setCases(liveCases.data.items.map(caseSummary));
+  }, [liveCases.data]);
+
   /** `?case=1023` opens a case directly; `?result=mismatch` pre-filters the table. */
   useEffect(() => {
     const requestedCase = readParam("case");
-    if (requestedCase && VERIFICATION_CASES.some((item) => item.id === requestedCase)) {
+    if (requestedCase && liveCases.data?.items.some((item) => item.case_id === requestedCase)) {
       setOpenCaseId(requestedCase);
+      void getCase(requestedCase).then((detail) => {
+        setCases((current) => current.some((item) => item.id === requestedCase)
+          ? current.map((item) => item.id === requestedCase ? caseDetail(detail) : item)
+          : [caseDetail(detail), ...current]);
+      }).catch(() => {});
     }
     const requestedResult = readParam("result");
     if (requestedResult && RESULT_OPTIONS.some((option) => option.value === requestedResult)) {
       setResult(requestedResult as ResultFilter);
     }
-  }, []);
+  }, [liveCases.data]);
 
   const changeResult = useCallback((next: ResultFilter) => {
     setResult(next);
@@ -119,7 +96,14 @@ export function CasesView() {
   const openCase = useCallback((item: VerificationCase) => {
     setOpenCaseId(item.id);
     writeParam("case", item.id);
-  }, []);
+    void getCase(item.id)
+      .then((detail) => setCases((current) => current.map((entry) => entry.id === item.id ? caseDetail(detail) : entry)))
+      .catch((error: unknown) => toast({
+        title: "Case detail is temporarily unavailable",
+        description: error instanceof Error ? error.message : "Please retry.",
+        tone: "warning",
+      }));
+  }, [toast]);
 
   const closeCase = useCallback(() => {
     setOpenCaseId(null);
@@ -128,31 +112,28 @@ export function CasesView() {
 
   /** Retry puts the case back into processing, the same as the engine would. */
   const retryCase = useCallback(
-    (id: string) => {
-      const target = cases.find((item) => item.id === id);
-      setCases((current) =>
-        current.map((item) =>
-          item.id === id
-            ? {
-                ...item,
-                result: "processing",
-                action: "view",
-                issue: "Reprocessing document",
-                issueDetail: "Re-running OCR at higher resolution",
-                updated: "Just now",
-                updatedOrder: -1,
-                fieldsChecked: 0,
-              }
-            : item,
-        ),
-      );
-      toast({
-        title: `Reprocessing ${target?.shipment ?? "case"}`,
-        description: "The document was queued for another extraction pass at higher OCR quality.",
-        tone: "info",
-      });
+    async (id: string) => {
+      const source = liveCases.data?.items.find((item) => item.case_id === id);
+      if (!source) return;
+      try {
+        await retryApiCase(source);
+        await liveCases.refresh();
+        setOpenCaseId(null);
+        toast({
+          title: `Reprocessing ${id}`,
+          description: "The case was safely queued for another processing pass.",
+          tone: "info",
+        });
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) await liveCases.refresh();
+        toast({
+          title: error instanceof ApiError && error.status === 409 ? "Case changed while it was open" : "Retry failed",
+          description: error instanceof ApiError && error.status === 409 ? "The live case was refreshed. Please review it and repeat the action." : error instanceof Error ? error.message : "Please retry.",
+          tone: "warning",
+        });
+      }
     },
-    [cases, toast],
+    [liveCases, toast],
   );
 
   const reviewCase = useCallback(
@@ -213,14 +194,45 @@ export function CasesView() {
     return picked;
   }, [cases]);
 
+  const summarySegments = useMemo<StatSegment[]>(() => {
+    const total = cases.length;
+    const count = (status: VerificationStatus) => cases.filter((item) => item.result === status).length;
+    const segment = (
+      id: string,
+      label: string,
+      value: number,
+      support: string,
+      accent: string,
+    ): StatSegment => ({
+      id,
+      label,
+      value,
+      support,
+      accent,
+      share: total ? Math.round((value / total) * 100) : 0,
+    });
+    return [
+      segment("all", "All Cases", total, "Verification cases", "bg-brand-500"),
+      segment("matched", "Matched", count("matched"), "No mismatch detected", "bg-matched-500"),
+      segment("mismatch", "Mismatch", count("mismatch"), "Discrepancy detected", "bg-mismatch-500"),
+      segment("needs_review", "Needs Review", count("needs_review"), "Human verification required", "bg-review-500"),
+    ];
+  }, [cases]);
+
   const activeCase = openCaseId ? (cases.find((item) => item.id === openCaseId) ?? null) : null;
+
+  if (liveCases.loading && !liveCases.data) return <LoadingState label="Loading verification cases" />;
+  if (liveCases.error && !liveCases.data) {
+    return <ErrorState message={liveCases.error} retry={() => void liveCases.refresh()} />;
+  }
 
   return (
     <>
+      {liveCases.stale && <StaleNotice />}
       <section className="flex flex-col gap-3">
         <p className="eyebrow">Overview — select to filter the table</p>
         <StatBar
-          segments={SUMMARY_SEGMENTS}
+          segments={summarySegments}
           activeId={result}
           onSelect={(id) =>
             changeResult(id === result && id !== "all" ? "all" : (id as ResultFilter))
@@ -358,7 +370,7 @@ export function CasesView() {
             </p>
           </div>
           <span className="tabular shrink-0 text-[12px] text-ink-400">
-            {rows.length} of {CASE_TOTALS.all} cases
+            {rows.length} of {cases.length} cases
           </span>
         </header>
 
@@ -537,7 +549,7 @@ export function CasesView() {
         )}
       </section>
 
-      <CaseDrawer verificationCase={activeCase} onClose={closeCase} onRetry={retryCase} />
+      <CaseDrawer verificationCase={activeCase} onClose={closeCase} onRetry={(id) => void retryCase(id)} />
     </>
   );
 }

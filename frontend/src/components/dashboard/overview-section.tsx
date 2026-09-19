@@ -4,8 +4,12 @@ import { useEffect, useState } from "react";
 import { TrendingDown, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { PeriodMenu } from "@/components/ui/period-menu";
+import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
 import { DonutChart } from "./donut-chart";
-import { PERIODS, PERIOD_ORDER, outcomeSlices, type Period } from "@/lib/mock-data";
+import { PERIOD_ORDER, outcomeSlices, type Period } from "@/lib/dashboard-data";
+import { getDashboard } from "@/lib/api";
+import { periodData } from "@/lib/live-view-models";
+import { useLiveQuery } from "@/lib/use-live-query";
 import { STATUS_META } from "@/lib/status";
 import { readParam, writeParam } from "@/lib/url-state";
 
@@ -19,6 +23,7 @@ import { readParam, writeParam } from "@/lib/url-state";
 export function OverviewSection() {
   const [period, setPeriod] = useState<Period>("week");
   const [activeSlice, setActiveSlice] = useState<number | null>(null);
+  const query = useLiveQuery((signal) => getDashboard(period, signal), [period]);
 
   /** `?period=day|week|month` makes the selected range shareable. */
   useEffect(() => {
@@ -34,11 +39,17 @@ export function OverviewSection() {
     writeParam("period", next === "week" ? null : next);
   };
 
-  const data = PERIODS[period];
+  if (query.loading && !query.data) return <LoadingState label="Loading dashboard metrics" />;
+  if (query.error && !query.data) {
+    return <ErrorState message={query.error} retry={() => void query.refresh()} />;
+  }
+
+  const data = periodData(query.data!);
   const slices = outcomeSlices(data);
 
   return (
     <section className="flex flex-col gap-4">
+      {query.stale && <StaleNotice />}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="eyebrow">Overview</p>

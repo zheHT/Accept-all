@@ -16,15 +16,13 @@ import {
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
 import { DocumentPreview, type PreviewDocument } from "@/components/ui/document-preview";
-import { documentBodyForCase, pendingDocumentBody } from "@/lib/document-text";
+import { pendingDocumentBody } from "@/lib/document-text";
 import { ClassificationBadge, EmailStatusBadge } from "./badges";
 import {
   CLASSIFICATION_META,
-  type EmailClassification,
   type InboxEmail,
   type MailAttachment,
 } from "@/lib/inbox-data";
-import { classifyEmail, mapBackendCategory } from "@/lib/api";
 
 /**
  * Email detail view.
@@ -43,52 +41,6 @@ export function EmailDrawer({
   const router = useRouter();
   const toast = useToast();
   const [preview, setPreview] = useState<PreviewDocument | null>(null);
-  const [liveResult, setLiveResult] = useState<{
-    classification: EmailClassification;
-    confidence: number;
-    reasoning: string;
-  } | null>(null);
-  const [isClassifying, setIsClassifying] = useState(false);
-
-  // Reset liveResult whenever a different email is opened
-  useEffect(() => {
-    setLiveResult(null);
-  }, [email?.id]);
-
-  const handleRunLiveClassifier = async () => {
-    if (!email) return;
-    setIsClassifying(true);
-    try {
-      const payload = {
-        email_id: email.id,
-        subject: email.subject,
-        body: email.body.join("\n"),
-        sender: email.senderEmail || email.sender,
-        attachments: email.attachments.map((a) => a.name),
-      };
-      const res = await classifyEmail(payload);
-      const mapped = mapBackendCategory(res.category);
-      setLiveResult({
-        classification: mapped,
-        confidence: res.confidence,
-        reasoning: res.reasoning,
-      });
-      toast({
-        title: "Live Gemini 1.5 Triage Success",
-        description: `${res.category} (${Math.round(res.confidence * 100)}%): ${res.reasoning}`,
-        tone: "success",
-      });
-    } catch (err: any) {
-      toast({
-        title: "Live Gemini Triage Error",
-        description: err.message || "Failed to classify email with Gemini backend",
-        tone: "warning",
-      });
-    } finally {
-      setIsClassifying(false);
-    }
-  };
-
   useEffect(() => {
     if (!email) return;
 
@@ -112,7 +64,6 @@ export function EmailDrawer({
 
       const body =
         (file.preview ? { lines: file.preview, problemLines: [] } : null) ??
-        documentBodyForCase(email.caseRef, file.role) ??
         pendingDocumentBody(file.name, email.sender);
 
       setPreview({
@@ -141,9 +92,9 @@ export function EmailDrawer({
 
   if (!email) return null;
 
-  const currentClassification = liveResult?.classification ?? email.classification;
-  const currentConfidence = liveResult?.confidence ?? email.confidence;
-  const currentReasoning = liveResult?.reasoning ?? email.classificationNote;
+  const currentClassification = email.classification;
+  const currentConfidence = email.confidence;
+  const currentReasoning = email.classificationNote;
   const meta = CLASSIFICATION_META[currentClassification];
   const si = email.attachments.find((file) => file.role === "SI");
   const bl = email.attachments.find((file) => file.role === "BL");
@@ -221,28 +172,12 @@ export function EmailDrawer({
           </dl>
 
           <section className="mt-5 rounded-xl border border-edge bg-surface/60 p-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Sparkles className="size-3.5 text-brand-600" strokeWidth={2.25} />
-                <p className="eyebrow">AI classification</p>
-              </div>
-              <button
-                type="button"
-                disabled={isClassifying}
-                onClick={handleRunLiveClassifier}
-                className="btn-glass flex items-center gap-1.5 px-2.5 py-1 text-[11.5px] font-medium text-brand-700 hover:border-brand-300 disabled:opacity-50"
-              >
-                <Sparkles className={cn("size-3", isClassifying && "animate-spin text-brand-500")} />
-                {isClassifying ? "Triaging with Gemini..." : "Re-classify with Gemini 1.5"}
-              </button>
+            <div className="flex items-center gap-2">
+              <Sparkles className="size-3.5 text-brand-600" strokeWidth={2.25} />
+              <p className="eyebrow">Production classification</p>
             </div>
             <div className="mt-3 flex items-center gap-3">
               <span className="text-[14px] font-semibold text-ink-900">{meta.label}</span>
-              {liveResult && (
-                <span className="rounded-md bg-matched-50 px-1.5 py-0.5 text-[10.5px] font-medium text-matched-700 ring-1 ring-inset ring-matched-200">
-                  Live Response
-                </span>
-              )}
             </div>
             <div className="mt-3 flex items-center gap-3">
               <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface ring-1 ring-inset ring-line">

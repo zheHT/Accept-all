@@ -2,6 +2,7 @@
 import os
 import sys
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -10,7 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 load_dotenv(override=True)
 
-from backend.agents.classifier_flow import classify_email, get_client
+from backend.evaluation_adapter.classifier_flow import classify_email, get_client
 
 
 def main():

@@ -1,197 +1,274 @@
-# monash-averis-hackathon
-# Class All
+# ClassAll Platform
 
-> Autonomous shipping document classification, multimodal extraction, and deterministic verification for digital logistics operations.
-> 
-> 
+> **A production-oriented hackathon prototype with enterprise safety patterns.**
 
-Developed for the **Monash-Averis Hackathon**, **Class All** streamlines logistics triage by processing incoming shipping emails, classifying intent, extracting key document fields via multimodal LLMs, and performing strict, rule-based cross-checks between Shipping Instructions (SI) and Bills of Lading (BL).
-
----
-
-## Key Features
-
-* **Semantic Triage & Categorization**: Filters and classifies incoming emails into 5 locked categories (`DOCUMENT_COMPARISON`, `NEW_SI_REQUEST`, `INVOICE_QUERY`, `GENERAL`, `SPAM`) using Gemini 1.5 Flash.
-* **Multimodal Data Extraction**: Extracts 7 core logistics fields (`shipper`, `consignee`, `notify_party`, `port_of_loading`, `port_of_discharge`, `container_count`, `gross_weight_kg`) from PDFs, scanned documents, and plain text with automatic normalization.
-* **Deterministic Validation Engine**: Zero-hallucination, pure Python logic for field-by-field verification with strict tolerance handling.
-* **Human-in-the-Loop Review**: Real-time discrepancy alerts pushed to Telegram with interactive inline buttons (`[ APPROVE ]` / `[ MANUAL CHECK ]`), coupled with a side-by-side comparison dashboard built in React.
-* **Automated Grading Pipeline**: Direct integration with hackathon grading and evaluation endpoints.
+ClassAll is an intelligent maritime shipping correspondence triage and document reconciliation platform. It ingests high-volume customer emails, classifies correspondence into operational categories, extracts and cross-checks shipping instructions against draft bills of lading across a strict 7-field verified contract, and orchestrates human-in-the-loop review with automated Gmail draft replies.
 
 ---
 
 ## System Architecture
 
-The solution uses a decoupled architecture deployed on Google Cloud Platform:
-
-```
-[ Email Feed / Grading API ] ──> Ingest Script
-                                      │
-                                      ▼
-[ React TS Dashboard ] ◄───► [ Cloud Run (FastAPI) ] ◄───► [ Telegram Bot ]
-(Firebase Hosting)                    │
-                     ┌────────────────┴────────────────┐
-                     ▼                                 ▼
-           [ Vertex AI / Gemini ]            [ Cloud Firestore ]
-         - Classifier Agent                  - shipping_cases
-         - Extractor Agent                   - audit_logs
-         - Deterministic Validator
-
-```
-
----
-
-## Repository Structure
-
 ```text
-monash-averis-hackathon/
-├── frontend/                     # React + TypeScript + Tailwind CSS UI
-│   ├── src/
-│   │   ├── api.ts                # API client connecting to Cloud Run backend
-│   │   ├── components/           # Side-by-side inspector & badge components
-│   │   └── pages/                # Inbox and Case Detail routes
-│   └── package.json
-│
-├── backend/                      # FastAPI Backend & AI Pipeline
-│   ├── api/
-│   │   ├── routes_processing.py  # POST /api/process (Pipeline entrypoint)
-│   │   ├── routes_cases.py       # GET /api/cases, POST /api/resolve
-│   │   └── routes_telegram.py    # POST /api/telegram-webhook, GET /api/cron/summary
-│   ├── models/
-│   │   ├── ai_schemas.py         # Pydantic schemas (EmailClassification, ExtractedDocument)
-│   │   └── api_schemas.py        # Dashboard & grading request/response schemas
-│   ├── agents/
-│   │   ├── classifier.py         # Gemini prompt & semantic routing
-│   │   └── extractor.py          # Multimodal SI/BL extraction logic
-│   ├── engine/
-│   │   └── validator.py          # Deterministic Python comparison engine
-│   ├── services/
-│   │   ├── db_service.py         # Firestore CRUD operations
-│   │   └── telegram_service.py   # Telegram webhook & alerting dispatch
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── main.py
-│
-├── docs/
-│   └── skills.md                 # Agent skill definitions and schemas
-└── ingest.py                     # Local grading and evaluation loop
+Gmail (Push Notifications) ──┐
+                             ├→ Pub/Sub ─→ Private Cloud Run Worker ──┐
+Telegram (Secure Webhook) ───┘                                        │
+                                                                      ├→ Ingestor ─→ GCS (Blobs) + Firestore (State)
+Reviewer ─→ Firebase Auth ─→ Cloud Run API ─→ Cases / Reviews / Drafts│                                            │
+                                  ↓                                   └──────────────────── Processor ◄────────────┘
+                    Next.js Static Dashboard (Firebase Hosting)                                 │
+                                                                                    Gemini LLM Discrepancy Engine
 
+[Evaluation CLI & Benchmarks] ─→ backend/evaluation_adapter (Isolated test harness; never deployed)
 ```
 
+### Core Architecture Components
+
+1. **Ingestion State Machine**:
+   - Resumable pipeline transitioning through `PENDING` → `DOCUMENTS_STORED` → `TASK_PUBLISHED`.
+   - Content-addressed document storage (`sha256:<hash>`) eliminates redundant uploads during network interruptions.
+   - Prevents race conditions: tasks are published to Pub/Sub only after 100% of attachments are confirmed in Google Cloud Storage.
+   - Immutable email cases reject altered attachment payloads; append-mode unions additional documents safely.
+
+2. **Loss-Safe Gmail Synchronization**:
+   - Full cursor pagination across `history.list` and `messages.list`.
+   - History cursors (`history_id`) advance only after all messages in a synchronization batch are successfully processed.
+   - Automatic cursor recovery: HTTP 404/410 cursor expiration triggers a 30-day paginated reconciliation window.
+   - Transient failures (429 rate limits, 5xx server errors, network timeouts) are raised to Pub/Sub for retry without corrupting the confirmed cursor.
+   - Watch renewals reconcile recent messages before persisting renewed expiration timestamps.
+
+3. **Processing Worker**:
+   - Private Cloud Run service receiving Pub/Sub push subscriptions.
+   - Distributed leasing (`processing_lease_seconds`) with terminal-state checks ensures exactly-once execution semantics despite Pub/Sub duplicate deliveries.
+   - Gemini multimodal reasoning extracts and cross-checks shipping documents against operational business rules.
+
+4. **Canonical API Service**:
+   - Cloud Run backend exposing public REST contracts (`/healthz`, `/api/dashboard`, `/api/inbox`, `/api/cases`, `/api/reviews`, `/api/settings`, `/api/knowledge-base`).
+   - Authenticated with Firebase ID tokens (`Authorization: Bearer <Firebase ID token>`), validated against Google Cloud Project audience and reviewer records.
+   - Optimistic concurrency control (`version` check with HTTP 409 Conflict) prevents concurrent reviewer overwrites.
+
+5. **Live Next.js Operations Dashboard**:
+   - Built with Next.js 15 App Router and deployed as a static export (`output: "export"`) via Firebase Hosting.
+   - Real-time 15-second polling on active views with automatic tab-visibility pausing and abort-controller cancellation.
+   - Fully source-backed: all tables, metrics, period filters, and inspection panels display live Firestore data.
+
+6. **Isolated Evaluation Adapter**:
+   - The legacy benchmark classifier is completely quarantined inside `backend/evaluation_adapter/`.
+   - Production services never import or expose evaluator endpoints (`/health`, `/api/classify`).
+
 ---
 
-## Core Pipeline & Validation Logic
+## The 7-Field Verified Contract
 
-1. **Classification**: Ingests raw email text and headers, executing a few-shot Gemini prompt constrained by `EmailClassification`.
-2. **Extraction**: If classified as `DOCUMENT_COMPARISON`, the multimodal extractor maps SI and BL documents to `ExtractedDocument`:
-* Normalizes non-standard values (e.g., `"3 x 40HC"` $\rightarrow$ `3`, `"22 MT"` $\rightarrow$ `22000.0`).
+Discrepancy detection between **Shipping Instructions (SI)** and draft **Bills of Lading (BL)** strictly extracts and verifies exactly seven operational fields:
 
+| Field Key | Display Name | Validation Scope |
+| :--- | :--- | :--- |
+| `shipper` | Shipper | Corporate name, registered address, contact details |
+| `consignee` | Consignee | Receiver name, physical delivery address, destination contact |
+| `notify_party` | Notify Party | Cargo arrival notice recipient or "SAME AS CONSIGNEE" |
+| `port_of_loading` | Port of Loading (POL) | Origin port name and UN/LOCODE (e.g., `MYPKG - Port Klang`) |
+| `port_of_discharge` | Port of Discharge (POD) | Destination port name and UN/LOCODE (e.g., `SGSIN - Singapore`) |
+| `container_count` | Container Count | Total quantity of containers (e.g., `2 x 40' HC`) |
+| `gross_weight` | Gross Weight | Cargo weight with metric unit specification (e.g., `28,450.00 KGS`) |
 
-3. **Deterministic Comparison**:
-* Compares all 7 normalized fields between SI and BL.
-* If values match: `has_defect = False`, `defect_fields = []`.
-* If values mismatch: `has_defect = True`, logs fields to `defect_fields`.
-* If attachments are illegible or mandatory fields are null: bypasses comparison and marks status as `NEEDS_REVIEW` with an explicit `review_reason`.
+> [!IMPORTANT]
+> **Vessel and Voyage Status**:
+> Vessel name and voyage number are treated strictly as **unverified email context** and are never evaluated as document discrepancy fields. Ocean carriers frequently alter feeder vessel feeder legs and voyage codes during initial booking stages; flagging these shifts as document defects causes operational false-alarms.
 
+### Production Categories
 
-4. **Resolution**: Discrepancies fire webhooks to Telegram and mark records in Firestore for manual review via the frontend dashboard.
+- `BL_COMPARISON`: Correspondence containing draft Bill of Lading and Shipping Instruction documents for discrepancy verification.
+- `SI_REQUEST`: New shipping instruction submissions or booking filing requests.
+- `INVOICE_QUERY`: Freight bills, demurrage charges, payment confirmations, and billing disputes.
+- `GENERAL`: Port operational advisories, sailing schedule queries, and general support.
+- `SPAM`: Unsolicited commercial solicitations and non-operational traffic.
+
+*(Note: Legacy categories `DOCUMENT_COMPARISON` and `NEW_SI_REQUEST` are isolated to `backend/evaluation_adapter` for test benchmark harness compliance).*
 
 ---
 
-## Getting Started
+## Operational Safety & Governance Policies
+
+### Dynamic & Immutable Platform Settings
+Stored in Firestore at `platform_settings/current`:
+- **Mutable Settings**:
+  - `confidence_threshold` (Default: `0.85`, Range: `0.50` - `0.99`): Threshold below which field extractions are flagged for human review.
+  - `mismatch_alerts_enabled` (Default: `true`): Toggles real-time alerts to Telegram while preserving dashboard review queues.
+- **Fixed Enterprise Safeguards**:
+  - `low_confidence_requires_review`: Fixed `true` — values under confidence threshold always require reviewer sign-off.
+  - `missing_value_requires_review`: Fixed `true` — any missing required contract field triggers human verification.
+  - `unreadable_requires_review`: Fixed `true` — corrupted, password-protected, or unparseable attachments automatically route to review.
+
+### Hardened Knowledge Base & Previews
+- Weekly knowledge bases aggregate operational exceptions and patterns by ISO week (e.g., `2026-W38`).
+- Generated Markdown documents are stored securely in Google Cloud Storage blobs.
+- Previews are rendered on-demand through an authenticated endpoint (`/api/knowledge-base/preview/{filename}`) with HTML escaping (`html.escape()`) and a strict Content Security Policy (`default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none';`).
+
+---
+
+## Environment Setup & Configuration
 
 ### Prerequisites
+- **Python**: 3.12 or higher with [`uv`](https://docs.astral.sh/uv/) package manager
+- **Node.js**: 20.x or higher with `npm`
+- **Docker**: Docker Desktop or engine for container builds
+- **Google Cloud SDK**: `gcloud` CLI configured with an active GCP project
+- **Firebase CLI**: `firebase-tools` for hosting deployments
 
-* Python 3.11+
-* Node.js 18+ & npm
-* Google Cloud SDK (`gcloud`)
-* Firebase CLI (`firebase-tools`)
+### Secret Management
+ClassAll separates mandatory core secrets from optional integration secrets:
 
-### Backend Setup
+#### Mandatory Core Secrets (GCP Secret Manager)
+- `grader-ingest-key`: Pre-shared secret key for automated ingestion endpoints.
+- `app-signing-secret`: Cryptographic key used to HMAC-sign and verify OAuth state tokens.
+- `gmail-oauth-client-json`: Google Cloud OAuth 2.0 Web Client credential JSON.
+- `gmail-address`: Dedicated operational mailbox address.
 
-1. **Navigate to the backend directory and set up a virtual environment**:
+#### Optional Integration Secrets
+- `telegram-bot-token`: Bot token for operator notifications.
+- `telegram-webhook-secret`: Webhook authentication token for incoming Telegram messages.
+- `telegram-admin-chat-id`: Telegram chat ID for administrative alert broadcasts.
+
+### Frontend Environment Variables
+Set in `frontend/.env.local` for development or exported in CI/CD:
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-
+NEXT_PUBLIC_API_URL="http://127.0.0.1:8080"
+NEXT_PUBLIC_FIREBASE_API_KEY="AIzaSy..."
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="your-project.firebaseapp.com"
+NEXT_PUBLIC_FIREBASE_PROJECT_ID="your-project"
+NEXT_PUBLIC_FIREBASE_APP_ID="1:...:web:..."
 ```
-
-
-2. **Environment Variables**:
-Create a `.env` file in `/backend`:
-```env
-PROJECT_ID=your-gcp-project-id
-REGION=asia-southeast1
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-TELEGRAM_CHAT_ID=your_chat_id
-GOOGLE_APPLICATION_CREDENTIALS=gcp-credentials.json
-
-```
-
-
-3. **Run Backend Locally**:
-```bash
-uvicorn main:app --host 0.0.0.0 --port 8080 --reload
-
-```
-
-
-
-### Frontend Setup
-
-1. **Navigate to the frontend directory**:
-```bash
-cd frontend
-npm install
-
-```
-
-
-2. **Configure Environment**:
-Create a `.env` file in `/frontend`:
-```env
-VITE_API_BASE_URL=http://localhost:8080
-
-```
-
-
-3. **Run Frontend Locally**:
-```bash
-npm run dev
-
-```
-
-
 
 ---
 
-## Deployment
+## Local Development Commands
 
-### Cloud Run (Backend)
-
+### 1. Recreate the Local Dataset
+The generated 520-email synthetic corpus is excluded from git. Recreate it deterministically:
 ```bash
-cd backend
-gcloud run deploy sdoc-backend \
-  --source . \
-  --region asia-southeast1 \
-  --allow-unauthenticated
-
+python data/generate.py --seed 42 --n 500 --out data
 ```
 
-### Firebase Hosting (Frontend)
-
+### 2. Backend Verification
 ```bash
-cd frontend
-npm run build
-firebase deploy --only hosting
+# Run the complete Python test suite (75 tests)
+uv run pytest -q
 
+# Run Python linting and code style checks
+uv run ruff check .
 ```
 
-### Telegram Webhook Registration
-
-Register your deployed Cloud Run endpoint with Telegram:
-
+### 3. Frontend Verification
 ```bash
-curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=https://<YOUR_CLOUD_RUN_URL>/api/telegram-webhook"
+# Run Vitest unit tests
+npm test --prefix frontend
 
+# Run ESLint validation
+npm run lint --prefix frontend
+
+# Run TypeScript typechecks
+npm run typecheck --prefix frontend
+
+# Compile production static export (outputs to frontend/out)
+npm run build --prefix frontend
+```
+
+### 4. Container Build & Health Verification
+```bash
+# Build API container image
+docker build -f Dockerfile.api -t classall-api:local .
+
+# Build Worker container image
+docker build -f Dockerfile.worker -t classall-worker:local .
+
+# Test local execution and verify healthcheck
+docker run -d --rm --name test-api -p 18080:8080 -e ENVIRONMENT=test classall-api:local
+curl http://localhost:18080/healthz
+# Returns: {"status":"ok","service":"classall-api"}
+docker stop test-api
+```
+
+---
+
+## Firebase Reviewer Authentication Setup
+
+1. **Enable Google Sign-In**:
+   - In the [Firebase Console](https://console.firebase.google.com/), navigate to **Authentication** > **Sign-in method**.
+   - Enable the **Google** provider and configure the authorized redirect domains.
+2. **Authorize Reviewer Accounts**:
+   - Create or verify a document in the Firestore `reviewers` collection:
+     ```json
+     {
+       "uid": "<FIREBASE_USER_UID>",
+       "email": "reviewer@company.com",
+       "role": "reviewer",
+       "active": true
+     }
+     ```
+3. **Session Enforcement**:
+   - The frontend automatically passes the Google ID token in the `Authorization: Bearer <token>` header.
+   - If a 401 Unauthorized status is returned, the client requests a refreshed ID token and retries the request once before redirecting to sign-in.
+
+---
+
+## Deployment & Rollback Strategy
+
+### Cloud Run & Firebase Deployment
+Automated end-to-end deployment is orchestrated by [`infra/deploy.sh`](file:///d:/agentic_ai_project/classall-platform/infra/deploy.sh):
+```bash
+bash infra/deploy.sh
+```
+This script:
+1. Verifies required Secret Manager secrets.
+2. Builds API and Worker container images and pushes them to Google Artifact Registry.
+3. Deploys `classall-api` and `classall-worker` to Cloud Run with least-privilege service accounts.
+4. Injects Firebase Web App configuration, builds the static Next.js export, and deploys `frontend/out` to Firebase Hosting.
+
+### Rollback Procedure
+All Firestore document schemas and views are designed to be strictly **additive and backward-compatible**, ensuring zero-downtime rollback without requiring database restoration:
+```bash
+# 1. Instantly roll back Cloud Run API to previous stable revision
+gcloud run services update-traffic classall-api --to-revisions=<PREVIOUS_API_REVISION>=100 --region=asia-southeast1
+
+# 2. Instantly roll back Cloud Run Worker to previous stable revision
+gcloud run services update-traffic classall-worker --to-revisions=<PREVIOUS_WORKER_REVISION>=100 --region=asia-southeast1
+
+# 3. Roll back Firebase Hosting release
+firebase hosting:rollback --project <PROJECT_ID>
+```
+
+---
+
+## Five-Step Hero Demonstration
+
+Experience the complete end-to-end workflow:
+
+```text
+Step 1: Ingest Email ──→ Step 2: Automated Triage ──→ Step 3: Reviewer Notification
+                                                                      │
+Step 5: Safe Gmail Reply ◄── Step 4: Discrepancy Verification ◄───────┘
+```
+
+1. **Step 1 — Ingest Incoming Email**:
+   - Customer submits an email with attached draft Bill of Lading and Shipping Instructions where the consignee address has a transposed street number.
+   - Gmail push notification delivers the event to Pub/Sub; the worker ingests the documents into Cloud Storage and records the case.
+2. **Step 2 — Automated Discrepancy Triage**:
+   - The worker runs Gemini document analysis across the 7 verified contract fields.
+   - The comparison detects the consignee mismatch: `status=MISMATCH`, `has_defect=true`, and `defect_fields=["consignee"]`.
+3. **Step 3 — Reviewer Dashboard Alert**:
+   - Reviewer logs in via Google Authentication on the live Next.js dashboard.
+   - The case appears immediately in the attention queue with the mismatch highlighted in the live badge counter.
+4. **Step 4 — Human-in-the-Loop Inspection**:
+   - Reviewer opens the case, compares the side-by-side extracted values against the original PDF attachments, and clicks **Decline**.
+5. **Step 5 — Safe Gmail Draft Generation & Dispatch**:
+   - The platform automatically generates a polite, precise draft reply in Gmail quoting the mismatched consignee details.
+   - The reviewer adjusts any notes and clicks **Send Draft**; the API verifies version and content-hash checksums before sending.
+
+---
+
+## Evaluation Benchmark & Scoring
+
+For evaluating the platform against the SDOC Hackathon reference dataset and scoring server, please refer to the dedicated [Evaluation Guide](file:///d:/agentic_ai_project/classall-platform/docs/EVALUATION_GUIDE.md).
+
+> [!NOTE]
+> The evaluation runner ([`scripts/eval_inbox.py`](file:///d:/agentic_ai_project/classall-platform/scripts/eval_inbox.py)) relies solely on the isolated [`backend/evaluation_adapter`](file:///d:/agentic_ai_project/classall-platform/backend/evaluation_adapter) package and does not interact with or deploy to the production Cloud Run architecture.

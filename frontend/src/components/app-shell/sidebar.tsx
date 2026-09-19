@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BookOpen,
   FileCheck2,
   Inbox,
   LayoutDashboard,
@@ -45,10 +46,12 @@ export function Sidebar() {
       icon: UserRoundCheck,
       badge: pendingReviews > 0 ? { value: pendingReviews, tone: "review" } : undefined,
     },
+    { label: "Knowledge Base", href: "/knowledge-base", icon: BookOpen },
   ];
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 flex w-[264px] flex-col border-r border-edge bg-surface/55 backdrop-blur-2xl backdrop-saturate-150">
+    <>
+    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[264px] flex-col border-r border-edge bg-surface/55 backdrop-blur-2xl backdrop-saturate-150 lg:flex">
       <div className="flex h-16 items-center gap-3 px-6">
         <span className="grid size-9 place-items-center rounded-xl bg-gradient-to-br from-brand-400 via-brand-600 to-brand-800 shadow-brand">
           <ShieldCheck className="size-5 text-white" strokeWidth={2.25} />
@@ -82,6 +85,19 @@ export function Sidebar() {
         </div>
       </nav>
     </aside>
+    <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 flex h-16 items-center justify-around border-t border-edge bg-surface/95 px-2 lg:hidden">
+      {[...primaryNav, SETTINGS_NAV].map((item) => {
+        const Icon = item.icon;
+        const active = isActive(item.href);
+        return (
+          <Link key={item.href} href={item.href} aria-label={item.label} aria-current={active ? "page" : undefined} className={cn("relative grid size-11 place-items-center rounded-xl transition-transform active:scale-95", active ? "bg-brand-50 text-brand-700" : "text-ink-400")}>
+            <Icon className="size-[18px]" />
+            {item.badge && <span className="absolute right-0 top-0 min-w-4 rounded-full bg-review-500 px-1 text-center text-[9px] font-bold leading-4 text-white">{item.badge.value}</span>}
+          </Link>
+        );
+      })}
+    </nav>
+    </>
   );
 }
 
