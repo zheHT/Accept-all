@@ -3,6 +3,7 @@ set -euo pipefail
 
 PROJECT_ID="${1:-gen-lang-client-0866395749}"
 REGION="${2:-asia-southeast1}"
+SKIP_BUILD="${3:-false}"
 GMAIL_RECONCILE_SCHEDULE="${GMAIL_RECONCILE_SCHEDULE:-0 * * * *}"
 
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1
@@ -23,8 +24,12 @@ for secret in "${REQUIRED_SECRETS[@]}"; do
 done
 
 COMMIT=$(git rev-parse --short HEAD)
-echo "Submitting Cloud Build with tag $COMMIT..."
-gcloud builds submit --project "$PROJECT_ID" --config infra/cloudbuild.yaml --substitutions="_TAG=$COMMIT,_REGION=$REGION" .
+if [ "$SKIP_BUILD" != "true" ] && [ "$SKIP_BUILD" != "--skip-build" ]; then
+    echo "Submitting Cloud Build with tag $COMMIT..."
+    gcloud builds submit --project "$PROJECT_ID" --config infra/cloudbuild.yaml --substitutions="_TAG=$COMMIT,_REGION=$REGION" .
+else
+    echo "Skipping Cloud Build, using existing image tag $COMMIT..."
+fi
 
 API_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/classall/classall-api:${COMMIT}"
 WORKER_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/classall/classall-worker:${COMMIT}"
@@ -173,21 +178,35 @@ if gcloud secrets versions list telegram-bot-token --project "$PROJECT_ID" --fil
 fi
 
 echo "Configuring and deploying Firebase..."
-APP_ID=$(firebase apps:list WEB --project "$PROJECT_ID" --json | grep -B 2 -A 5 '"displayName": "ClassAll Reviewer"' | grep '"appId"' | head -n 1 | sed -E 's/.*"appId": "([^"]+)".*/\1/')
-SDK_CONFIG=$(firebase apps:sdkconfig WEB "$APP_ID" --project "$PROJECT_ID" --json)
+APP_ID=$(firebase apps:list WEB --project "$PROJECT_ID" --json 2>/dev/null | grep -B 2 -A 5 '"displayName": "ClassAll Reviewer"' | grep '"appId"' | head -n 1 | sed -E 's/.*"appId": "([^"]+)".*/\1/' || true)
+if [ -z "$APP_ID" ]; then
+    APP_ID="1:669899307969:web:d2e29d52006cdde8f48d40"
+fi
+
+SDK_CONFIG=$(firebase apps:sdkconfig WEB "$APP_ID" --project "$PROJECT_ID" --json 2>/dev/null || true)
 
 export NEXT_PUBLIC_API_URL="$API_URL"
-export NEXT_PUBLIC_FIREBASE_API_KEY=$(echo "$SDK_CONFIG" | grep '"apiKey"' | head -n 1 | sed -E 's/.*"apiKey": "([^"]+)".*/\1/')
-export NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=$(echo "$SDK_CONFIG" | grep '"authDomain"' | head -n 1 | sed -E 's/.*"authDomain": "([^"]+)".*/\1/')
-export NEXT_PUBLIC_FIREBASE_PROJECT_ID=$(echo "$SDK_CONFIG" | grep '"projectId"' | head -n 1 | sed -E 's/.*"projectId": "([^"]+)".*/\1/')
+API_KEY=$(echo "$SDK_CONFIG" | grep '"apiKey"' | head -n 1 | sed -E 's/.*"apiKey": "([^"]+)".*/\1/' || true)
+AUTH_DOMAIN=$(echo "$SDK_CONFIG" | grep '"authDomain"' | head -n 1 | sed -E 's/.*"authDomain": "([^"]+)".*/\1/' || true)
+PROJ_ID=$(echo "$SDK_CONFIG" | grep '"projectId"' | head -n 1 | sed -E 's/.*"projectId": "([^"]+)".*/\1/' || true)
+
+export NEXT_PUBLIC_FIREBASE_API_KEY="${API_KEY:-AIzaSyCspcp8qI8ohUcx4Y9SxA4ZPZdKr__Tv4o}"
+export NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="${AUTH_DOMAIN:-${PROJECT_ID}.firebaseapp.com}"
+export NEXT_PUBLIC_FIREBASE_PROJECT_ID="${PROJ_ID:-$PROJECT_ID}"
 export NEXT_PUBLIC_FIREBASE_APP_ID="$APP_ID"
 
-npm ci --prefix frontend
+if [ ! -d "frontend/node_modules" ]; then
+    npm ci --prefix frontend
+fi
 npm run build --prefix frontend
 firebase deploy --project "$PROJECT_ID" --only hosting,firestore:rules,firestore:indexes
 
-echo "Deployment finished successfully!"
-echo "API_URL=$API_URL"
-echo "WORKER_URL=$WORKER_URL"
+echo ""
+echo "=========================================="
+echo "DEPLOYMENT FINISHED SUCCESSFULLY!"
+echo "API_URL       = $API_URL"
+echo "WORKER_URL    = $WORKER_URL"
+echo "DASHBOARD_URL = https://classall-review-0866395749.web.app"
+echo "=========================================="
 echo "Run the Gmail OAuth connection from the reviewer dashboard, then execute:"
 echo "gcloud scheduler jobs run gmail-watch-renewal --location=$REGION --project=$PROJECT_ID"

@@ -301,7 +301,10 @@ function WeeklyBriefing({
   const categories = Object.entries(week.category_counts)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 3);
-  const externalDriveUrl = week.drive_url?.startsWith("https://") ? week.drive_url : null;
+  const isRealDriveUrl =
+    Boolean(week.drive_url?.startsWith("https://")) &&
+    !week.drive_url?.includes("ClassAll_");
+  const externalDriveUrl = isRealDriveUrl ? week.drive_url : null;
 
   return (
     <li className="px-5 py-5">
