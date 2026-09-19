@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from backend.api.main import create_app as create_api_app
+from backend.api.markdown_preview import render_preview_document
 from backend.core.runtime import Runtime
 from backend.core.schemas import ResultStatus
 from backend.worker.main import create_app as create_worker_app
@@ -108,7 +109,22 @@ def test_api_knowledge_base_routes(runtime: Runtime) -> None:
     # Preview route
     preview_resp = api.get("/api/knowledge-base/preview/ClassAll_Assumptions_2026-W39")
     assert preview_resp.status_code == 200
-    assert "ClassAll" in preview_resp.text
+    assert "<h1>ClassAll" in preview_resp.text
+    assert "<table>" in preview_resp.text
+    assert "<pre>" not in preview_resp.text
+
+
+def test_markdown_preview_renders_document_and_escapes_stored_html() -> None:
+    preview = render_preview_document(
+        "# Weekly Summary\n\n## Outcomes\n| Status | Count |\n| --- | --- |\n"
+        "| OK | 7 |\n\n<script>alert('xss')</script>"
+    )
+
+    assert "<h1>Weekly Summary</h1>" in preview
+    assert "<th scope='col'>Status</th>" in preview
+    assert "<td>7</td>" in preview
+    assert "<script>" not in preview
+    assert "&lt;script&gt;" in preview
 
 
 def test_worker_weekly_summary_cron_publishes(runtime: Runtime) -> None:

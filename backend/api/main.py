@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hmac
-import html
 import re
 import secrets
 import time
@@ -15,6 +14,7 @@ from google.api_core.exceptions import Conflict
 from google.cloud import secretmanager
 from google.oauth2 import id_token
 
+from backend.api.markdown_preview import render_preview_document
 from backend.api.views import (
     build_case_detail,
     build_case_summary,
@@ -374,16 +374,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         markdown = runtime.knowledge_publisher.blobs.download(preview_uri).decode(
             "utf-8", errors="replace"
         )
-        document = (
-            "<!doctype html><html><head><meta charset='utf-8'>"
-            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            "<title>ClassAll knowledge preview</title>"
-            "<style>body{font:15px/1.65 system-ui,sans-serif;margin:0;padding:32px;"
-            "max-width:900px;color:#17322d;background:#f4f7f5}pre{white-space:pre-wrap;"
-            "overflow-wrap:anywhere;background:#fff;padding:24px;border-radius:12px;"
-            "box-shadow:0 1px 3px rgba(0,0,0,.12)}</style></head><body><pre>"
-            f"{html.escape(markdown)}</pre></body></html>"
-        )
+        document = render_preview_document(markdown)
         return HTMLResponse(
             content=document,
             headers={
