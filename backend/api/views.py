@@ -69,6 +69,7 @@ def _public_document(document: dict[str, Any]) -> dict[str, Any]:
         "sha256": document.get("sha256"),
         "document_type": extraction.get("document_type", "UNKNOWN"),
         "readable": extraction.get("readable"),
+        "raw_text": document.get("raw_text") or extraction.get("raw_text"),
     }
 
 

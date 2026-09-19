@@ -64,6 +64,7 @@ export interface PublicDocument {
   sha256: string;
   document_type: "SI" | "BL" | "OTHER" | "UNKNOWN";
   readable?: boolean | null;
+  raw_text?: string | null;
 }
 export interface FieldValue {
   value: string | number | null;

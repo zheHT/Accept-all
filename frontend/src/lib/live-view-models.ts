@@ -24,6 +24,7 @@ import type {
 } from "@/lib/review-data";
 import type { CaseRow, Period, PeriodData } from "@/lib/dashboard-data";
 import type { VerificationStatus } from "@/lib/status";
+import { buildDocumentLines } from "@/lib/document-text";
 
 const FIELD_LABELS: Record<string, FieldName> = {
   shipper: "Shipper",
@@ -327,11 +328,14 @@ function evidence(name: string, field: string, value: string | null, note?: stri
 export function reviewSummary(item: CaseSummary): ReviewCase {
   const problem = item.low_confidence_fields[0] || item.defect_fields[0] || "verification result";
   const when = item.created_at;
+  const label = fieldLabel(problem);
+  const siBuild = buildDocumentLines("SI", null, null, label);
+  const blBuild = buildDocumentLines("BL", null, null, label);
   return {
     id: item.case_id,
     caseId: item.case_id,
     shipment: item.source_message_id || item.case_id,
-    problemField: fieldLabel(problem),
+    problemField: label,
     reason: item.review_reason || "Human confirmation is required",
     reasonCode: reviewReason(item),
     reasonDetail: item.review_reason || "The production safety policy requires a reviewer to decide this case.",
@@ -339,8 +343,26 @@ export function reviewSummary(item: CaseSummary): ReviewCase {
     status: item.review_decision ? "resolved" : "pending",
     created: relativeTime(when),
     createdOrder: timestampOrder(when),
-    si: evidence("Shipping Instruction", fieldLabel(problem), null),
-    bl: evidence("Bill of Lading", fieldLabel(problem), null),
+    si: {
+      name: "Shipping Instruction",
+      pages: 1,
+      snippet: siBuild.lines,
+      fullLines: siBuild.lines,
+      problemLines: siBuild.problemLines,
+      highlightIndex: siBuild.problemLines[0] ?? 0,
+      extractedLabel: label,
+      extractedValue: null,
+    },
+    bl: {
+      name: "Bill of Lading",
+      pages: 1,
+      snippet: blBuild.lines,
+      fullLines: blBuild.lines,
+      problemLines: blBuild.problemLines,
+      highlightIndex: blBuild.problemLines[0] ?? 0,
+      extractedLabel: label,
+      extractedValue: null,
+    },
   };
 }
 
@@ -351,15 +373,41 @@ export function reviewDetail(item: CaseDetail): ReviewCase {
   const siDocument = item.documents.find((document) => document.document_type === "SI");
   const blDocument = item.documents.find((document) => document.document_type === "BL");
   if (!comparison) return base;
+
+  const problemField = comparison.label || fieldLabel(comparison.field);
+  const siVal = valueText(comparison.si);
+  const blVal = valueText(comparison.bl);
+
+  const siBuild = buildDocumentLines("SI", siDocument, item.comparisons, problemField);
+  const blBuild = buildDocumentLines("BL", blDocument, item.comparisons, problemField);
+
   return {
     ...base,
-    problemField: comparison.label || fieldLabel(comparison.field),
+    problemField,
     reasonDetail: item.rationale || base.reasonDetail,
     confidence: Math.min(comparison.si.confidence ?? 1, comparison.bl.confidence ?? 1),
-    si: evidence(siDocument?.filename || "Shipping Instruction", comparison.label, valueText(comparison.si), comparison.si.evidence),
+    si: {
+      name: siDocument?.filename || "Shipping Instruction",
+      pages: 1,
+      snippet: siBuild.lines,
+      fullLines: siBuild.lines,
+      problemLines: siBuild.problemLines,
+      highlightIndex: siBuild.problemLines[0] ?? 0,
+      extractedLabel: comparison.label,
+      extractedValue: siVal,
+      rawText: siDocument?.raw_text ?? null,
+    },
     bl: {
-      ...evidence(blDocument?.filename || "Bill of Lading", comparison.label, valueText(comparison.bl), comparison.bl.evidence),
+      name: blDocument?.filename || "Bill of Lading",
+      pages: 1,
       scanned: blDocument?.readable === false,
+      snippet: blBuild.lines,
+      fullLines: blBuild.lines,
+      problemLines: blBuild.problemLines,
+      highlightIndex: blBuild.problemLines[0] ?? 0,
+      extractedLabel: comparison.label,
+      extractedValue: blVal,
+      rawText: blDocument?.raw_text ?? null,
     },
   };
 }

@@ -49,6 +49,9 @@ export interface DocumentEvidence {
   highlightIndex: number;
   extractedLabel: string;
   extractedValue: string | null;
+  rawText?: string | null;
+  fullLines?: string[];
+  problemLines?: number[];
 }
 
 export interface ReviewDecision {
