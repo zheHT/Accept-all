@@ -18,7 +18,6 @@ import type {
   MailAttachment,
 } from "@/lib/inbox-data";
 import type {
-  DocumentEvidence,
   ReviewCase,
   ReviewReasonCode,
 } from "@/lib/review-data";
@@ -311,18 +310,6 @@ function reviewReason(item: CaseSummary): ReviewReasonCode {
   if (item.low_confidence || reason.includes("confidence")) return "low_confidence";
   if (reason.includes("ambiguous")) return "ambiguous_value";
   return "processing_issue";
-}
-
-function evidence(name: string, field: string, value: string | null, note?: string | null): DocumentEvidence {
-  const lines = [note || `${field}: ${value || "Not available"}`];
-  return {
-    name,
-    pages: 1,
-    snippet: lines,
-    highlightIndex: 0,
-    extractedLabel: field,
-    extractedValue: value,
-  };
 }
 
 export function reviewSummary(item: CaseSummary): ReviewCase {

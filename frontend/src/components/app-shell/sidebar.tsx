@@ -28,7 +28,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const { unreadEmails, pendingReviews } = useWorkspaceCounts();
   const isActive = (href: string) =>
-    href === "/" ? pathname === "/" : pathname.startsWith(href);
+    pathname ? (href === "/" ? pathname === "/" : pathname.startsWith(href)) : false;
 
   // Badges track what is still untouched, so they fall as the operator works.
   const primaryNav: NavItem[] = [
