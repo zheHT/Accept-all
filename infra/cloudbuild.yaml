@@ -1,0 +1,13 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "Dockerfile.api", "-t", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/classall/classall-api:${_TAG}", "."]
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "Dockerfile.worker", "-t", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/classall/classall-worker:${_TAG}", "."]
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/classall/classall-api:${_TAG}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/classall/classall-worker:${_TAG}"
+substitutions:
+  _REGION: asia-southeast1
+  _TAG: latest
+options:
+  logging: CLOUD_LOGGING_ONLY

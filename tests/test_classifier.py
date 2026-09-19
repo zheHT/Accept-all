@@ -6,7 +6,6 @@ while strictly validating production model configuration ('gemini-2.5-flash').
 """
 import io
 import json
-import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -18,23 +17,18 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 import docx
-import httpx
 import openpyxl
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from backend.agents.classifier_flow import (
-    SYSTEM_INSTRUCTION,
     classify_email,
-    _check_missing_attachments,
 )
 from backend.main import app
 from backend.models.schemas import (
     EmailCategory,
     EmailClassification,
-    EmailInputPayload,
-    SubmissionItem,
 )
 from backend.utils.attachment_sniffer import MAX_CHARS, inspect_attachment
 

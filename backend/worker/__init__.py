@@ -1,0 +1,1 @@
+"""Private ClassAll worker service."""

@@ -11,17 +11,17 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from loader import Inbox
 from backend.agents.classifier_flow import classify_email
-from backend.models.schemas import EmailCategory, SubmissionItem
+from backend.models.schemas import SubmissionItem
 from backend.utils.attachment_sniffer import inspect_attachment
+from loader import Inbox
 
 # Category mapping for server scoring compatibility
 SERVER_CATEGORY_MAP = {
@@ -54,13 +54,13 @@ def evaluate_inbox(
     output_file: str = "submission.json",
     server_compat: bool = False,
     auto_submit: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run batch triage classification over inbox emails and produce submission dict."""
-    print(f"\n=======================================================")
-    print(f" Maritime Shipping Email Triage Evaluator")
+    print("\n=======================================================")
+    print(" Maritime Shipping Email Triage Evaluator")
     print(f" Source: {source}")
     print(f" Server Compatibility Mapping: {server_compat}")
-    print(f"=======================================================\n")
+    print("=======================================================\n")
 
     inbox = Inbox(source)
     all_emails = inbox.emails()
@@ -73,7 +73,7 @@ def evaluate_inbox(
     else:
         eval_emails = all_emails
 
-    submission: Dict[str, Dict[str, Any]] = {}
+    submission: dict[str, dict[str, Any]] = {}
     stats = {
         "DOCUMENT_COMPARISON": 0,
         "NEW_SI_REQUEST": 0,
@@ -94,7 +94,7 @@ def evaluate_inbox(
         attachment_paths = email_record.get("attachments", []) or []
 
         # Extract attachment previews
-        attachment_previews: Dict[str, str] = {}
+        attachment_previews: dict[str, str] = {}
         for att_path in attachment_paths:
             filename = os.path.basename(att_path)
             try:

@@ -1,6 +1,6 @@
 """Pydantic v2 schemas for the Maritime Shipping Email Classifier & Triage Agent."""
 from enum import Enum
-from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -61,11 +61,11 @@ class EmailInputPayload(BaseModel):
         ...,
         description="Full text body of the email message."
     )
-    sender: Optional[str] = Field(
+    sender: str | None = Field(
         default="",
         description="Sender email address or display name."
     )
-    attachments: Optional[list[str]] = Field(
+    attachments: list[str] | None = Field(
         default_factory=list,
         description="List of attachment paths, filenames, or identifiers."
     )
@@ -79,11 +79,11 @@ class SubmissionItem(BaseModel):
         ...,
         description="Category string matching the evaluator format."
     )
-    status: Optional[str] = Field(
+    status: str | None = Field(
         default=None,
         description="Evaluation status: OK, MISMATCH, MISMATCH_DETECTED, or NEEDS_REVIEW."
     )
-    has_defect: Optional[bool] = Field(
+    has_defect: bool | None = Field(
         default=None,
         description="Boolean indicating whether a defect was detected."
     )
@@ -91,7 +91,7 @@ class SubmissionItem(BaseModel):
         default_factory=list,
         description="List of fields where discrepancies/defects were detected."
     )
-    review_reason: Optional[str] = Field(
+    review_reason: str | None = Field(
         default=None,
         description="Reason why human review is required if status is NEEDS_REVIEW."
     )

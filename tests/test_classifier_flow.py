@@ -1,5 +1,5 @@
 """Unit tests for classifier flow and triage rules."""
-from backend.agents.classifier_flow import classify_email, _check_missing_attachments
+from backend.agents.classifier_flow import classify_email
 from backend.models.schemas import EmailCategory
 
 

@@ -10,9 +10,7 @@ Covers 8 critical failure points:
 7. Zero-Byte or Empty Attachments
 8. Strict Output Schema Enforcement & Markdown Code Fence Stripping
 """
-import io
 import json
-import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -27,16 +25,14 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from backend.agents.classifier_flow import (
-    classify_email,
     _check_missing_attachments,
+    classify_email,
 )
 from backend.main import app
 from backend.models.schemas import (
     EmailCategory,
-    EmailClassification,
-    EmailInputPayload,
 )
-from backend.utils.attachment_sniffer import MAX_CHARS, inspect_attachment
+from backend.utils.attachment_sniffer import inspect_attachment
 
 
 # --------------------------------------------------------------------------

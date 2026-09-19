@@ -1,10 +1,11 @@
 """Unit tests for attachment sniffer across supported formats."""
 import io
+
 import docx
 import openpyxl
 import pypdf
 
-from backend.utils.attachment_sniffer import inspect_attachment, MAX_CHARS
+from backend.utils.attachment_sniffer import MAX_CHARS, inspect_attachment
 
 
 def test_plain_text_inspection():

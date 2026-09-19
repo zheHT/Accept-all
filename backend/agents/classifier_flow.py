@@ -1,37 +1,41 @@
 """Triage classifier agent for maritime shipping correspondence using Gemini 1.5 Flash."""
-import json
 import logging
 import os
 import re
-from typing import Optional
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from pydantic import ValidationError
 
 from backend.models.schemas import EmailCategory, EmailClassification
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-client: Optional[genai.Client] = None
+client: genai.Client | None = None
 
 
-def get_client() -> Optional[genai.Client]:
-    """Retrieve or dynamically initialize the GenAI Client when API key is available."""
+def get_client() -> genai.Client | None:
+    """Retrieve or dynamically initialize the GenAI Client using Vertex AI and GCP."""
     global client
-    if client is not None:
-        return client
     load_dotenv(override=True)
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if api_key:
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0866395749")
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
+    try:
+        c = genai.Client(vertexai=True, project=project, location=location)
+        client = c
+        return c
+    except Exception as e:
+        logger.debug(f"Vertex AI initialization with location {location} deferred: {e}")
         try:
-            client = genai.Client(api_key=api_key)
-            logger.info("Successfully initialized google.genai Client with API key.")
-        except Exception as e:
-            logger.warning(f"Could not initialize google.genai Client: {e}. Fallback enabled.")
+            c = genai.Client(vertexai=True, project=project, location="us-central1")
+            client = c
+            return c
+        except Exception as e2:
+            logger.warning(f"Could not initialize Vertex AI Client: {e2}. Fallback enabled.")
             client = None
-    return client
+            return None
 
 
 # Initial check at import time
@@ -154,7 +158,7 @@ Classification: {
 
 def _check_missing_attachments(
     category: EmailCategory,
-    attachment_previews: Optional[dict[str, str]],
+    attachment_previews: dict[str, str] | None,
 ) -> bool:
     """Guardrail to flag missing, corrupted, or unreadable attachments for DOCUMENT_COMPARISON."""
     if category != EmailCategory.DOCUMENT_COMPARISON:
@@ -170,7 +174,7 @@ def _check_missing_attachments(
     ]
 
     readable_count = 0
-    for name, content in attachment_previews.items():
+    for _name, content in attachment_previews.items():
         if not content:
             continue
         trimmed = content.strip()
@@ -186,7 +190,7 @@ def _classify_with_heuristics(
     subject: str,
     sender: str,
     body: str,
-    attachment_previews: Optional[dict[str, str]] = None,
+    attachment_previews: dict[str, str] | None = None,
 ) -> EmailClassification:
     """High-accuracy deterministic fallback classifier based on maritime shipping operational rules."""
     text = f"{subject}\n{body}".lower()
@@ -239,13 +243,7 @@ def _classify_with_heuristics(
     si_att = any(re.search(r"(_si\b|si_|\bshipping_instruction)", a.lower()) for a in att_names)
 
     is_comparison = False
-    if (bl_att and si_att) or (has_bl_keyword and (has_si_keyword or si_att) and has_compare_action) or (has_bl_keyword and has_compare_action):
-        is_comparison = True
-    elif "confirm docs" in text and (bl_att or si_att or has_bl_keyword):
-        is_comparison = True
-    elif ("for checking" in text or "amend bl" in text or "draft bl" in text) and (has_bl_keyword and has_compare_action):
-        is_comparison = True
-    elif bl_att and has_compare_action:
+    if (bl_att and si_att) or (has_bl_keyword and (has_si_keyword or si_att) and has_compare_action) or (has_bl_keyword and has_compare_action) or "confirm docs" in text and (bl_att or si_att or has_bl_keyword) or ("for checking" in text or "amend bl" in text or "draft bl" in text) and (has_bl_keyword and has_compare_action) or bl_att and has_compare_action:
         is_comparison = True
 
     if is_comparison:
@@ -305,7 +303,7 @@ def classify_email(
     subject: str,
     sender: str,
     body: str,
-    attachment_previews: Optional[dict[str, str]] = None,
+    attachment_previews: dict[str, str] | None = None,
 ) -> EmailClassification:
     """Classify an email using Gemini 1.5 Flash structured output with deterministic fallback.
 
@@ -342,64 +340,58 @@ Attached Document Previews:
 
 Respond with the exact JSON matching EmailClassification schema."""
 
-    # FORCE LIVE GEMINI 1.5 FLASH CALL (Fallback disabled per Task 3)
-    load_dotenv(override=True)
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        err_msg = (
-            "GEMINI_API_KEY is not set in environment or .env file! "
-            "Offline heuristic fallback is currently disabled to test real Gemini API calls. "
-            "Please add GEMINI_API_KEY to your .env file or environment."
-        )
-        logger.error(err_msg)
-        raise RuntimeError(err_msg)
+    # Vertex AI Live Inference on GCP (with graceful deterministic fallback)
+    live_client = get_client()
+    if live_client is not None:
+        try:
+            model_name = os.environ.get("PRIMARY_MODEL", "gemini-2.5-flash")
+            response = live_client.models.generate_content(
+                model=model_name,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    temperature=0.0,
+                    response_mime_type="application/json",
+                    response_schema=EmailClassification,
+                ),
+            )
 
-    import traceback
+            result_text = (response.text or "").strip()
+            if result_text.startswith("```"):
+                lines = result_text.splitlines()
+                if lines and lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip().startswith("```"):
+                    lines = lines[:-1]
+                result_text = "\n".join(lines).strip()
 
-    try:
-        live_client = genai.Client(api_key=api_key)
-        response = live_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.0,
-                response_mime_type="application/json",
-                response_schema=EmailClassification,
-            ),
-        )
+            classification = EmailClassification.model_validate_json(result_text)
 
-        result_text = (response.text or "").strip()
-        # Clean markdown code fences if present (e.g., ```json ... ```)
-        if result_text.startswith("```"):
-            lines = result_text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip().startswith("```"):
-                lines = lines[:-1]
-            result_text = "\n".join(lines).strip()
+            if not classification.detected_attachments and detected_att_names:
+                classification.detected_attachments = detected_att_names
 
-        classification = EmailClassification.model_validate_json(result_text)
+            classification.is_comparison_candidate = (
+                classification.category == EmailCategory.DOCUMENT_COMPARISON
+            )
 
-        # Ensure detected_attachments includes input attachments if LLM left it empty
-        if not classification.detected_attachments and detected_att_names:
-            classification.detected_attachments = detected_att_names
-
-        # Enforce strict candidate rule: strictly True for DOCUMENT_COMPARISON
-        classification.is_comparison_candidate = (
-            classification.category == EmailCategory.DOCUMENT_COMPARISON
-        )
-
-        # Post-processing guardrail: check missing/unreadable attachments
-        if classification.category == EmailCategory.DOCUMENT_COMPARISON:
-            if _check_missing_attachments(classification.category, att_dict):
+            if (
+                classification.category == EmailCategory.DOCUMENT_COMPARISON
+                and _check_missing_attachments(classification.category, att_dict)
+            ):
                 classification.missing_attachments_flag = True
 
-        return classification
+            return classification
 
-    except Exception as e:
-        stack_trace = traceback.format_exc()
-        logger.error(f"Live Gemini API call failed for email {email_id}:\n{stack_trace}")
-        print(f"\n[ERROR] Live Gemini API call failed for {email_id}: {e}\n{stack_trace}")
-        raise
+        except ValidationError:
+            raise
+        except Exception as e:
+            err_str = str(e).lower()
+            if "429" in err_str or "resourceexhausted" in err_str or "rate limit" in err_str or "too many requests" in err_str:
+                raise
+            logger.warning(
+                f"Vertex AI inference failed for {email_id}: {e}. Executing heuristic fallback."
+            )
+
+    # Deterministic rule-based heuristic classification fallback
+    return _classify_with_heuristics(email_id, subject, sender, body, att_dict)
 

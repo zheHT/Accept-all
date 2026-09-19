@@ -1,7 +1,6 @@
 """Safe content inspector for maritime shipping email attachments."""
 import io
 import os
-from typing import Union
 
 MAX_CHARS = 1000
 
@@ -20,7 +19,7 @@ SHIPPING_KEYWORDS = [
 ]
 
 
-def inspect_attachment(filename: str, content: Union[bytes, str]) -> str:
+def inspect_attachment(filename: str, content: bytes | str) -> str:
     """Inspect and extract up to 1,000 characters from an attachment preview.
 
     Supports:
