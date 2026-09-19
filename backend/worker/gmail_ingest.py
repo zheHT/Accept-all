@@ -91,11 +91,11 @@ def process_gmail_notification(runtime: Runtime, notification: dict[str, Any]) -
     return case_ids
 
 
-def reconcile_recent_gmail(runtime: Runtime) -> list[str]:
+def reconcile_recent_gmail(runtime: Runtime, max_results: int | None = None) -> list[str]:
     """Periodic reconciliation job to recover any missed emails in target Gmail label."""
     label = runtime.settings.gmail_label or "INBOX"
     query = f"label:{label} newer_than:30d -in:spam -in:trash"
-    messages = runtime.gmail.list_messages(query)
+    messages = runtime.gmail.list_messages(query, max_results=max_results)
     return [
         case_id
         for item in messages

@@ -147,6 +147,7 @@ def build_case_detail(case: dict[str, Any], documents: list[dict[str, Any]]) -> 
                 "state": case.get("draft_state"),
                 "subject": case.get("draft_subject"),
                 "body": case.get("draft_body"),
+                "gmail_url": case.get("gmail_draft_url"),
                 "content_hash": case.get("draft_content_hash"),
             }
             if case.get("gmail_draft_id")

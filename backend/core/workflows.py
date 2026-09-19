@@ -51,12 +51,14 @@ def create_case_draft(
         thread_id=case.get("gmail_thread_id", ""),
         message_id_header=case.get("gmail_message_id_header", ""),
     )
+    draft_url = f"https://mail.google.com/mail/u/0/#drafts/{draft['id']}"
     hash_value = content_hash(subject, body)
     updated = repository.update_case(
         case["case_id"],
         {
             "review_decision": "DECLINE",
             "gmail_draft_id": draft["id"],
+            "gmail_draft_url": draft_url,
             "draft_subject": subject,
             "draft_body": body,
             "draft_content_hash": hash_value,
@@ -84,6 +86,7 @@ def create_case_draft(
             f"<b>Gmail draft ready</b>\nSubject: {subject}\n\n{body}",
             reply_markup={
                 "inline_keyboard": [
+                    [{"text": "OPEN IN GMAIL", "url": draft_url}],
                     [{"text": "SEND DRAFT", "callback_data": f"send:{action_id}"}],
                 ]
             },

@@ -55,6 +55,19 @@ class DocumentType(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class DocumentRoute(BaseModel):
+    filename: str
+    document_type: DocumentType
+
+
+class EmailClassification(BaseModel):
+    category: EmailCategory
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    rationale: str
+    assumptions: list[str] = Field(default_factory=list)
+    documents: list[DocumentRoute] = Field(default_factory=list)
+
+
 class ExtractedField(BaseModel):
     value: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)

@@ -22,6 +22,10 @@ def test_decline_creates_draft_and_one_time_send_action(runtime):
     assert updated["draft_content_hash"] == content_hash(
         updated["draft_subject"], updated["draft_body"]
     )
+    assert updated["gmail_draft_url"] == "https://mail.google.com/mail/u/0/#drafts/draft-1"
+    assert runtime.telegram.messages[-1][2]["inline_keyboard"][0][0]["url"] == (
+        "https://mail.google.com/mail/u/0/#drafts/draft-1"
+    )
     action_id = next(iter(runtime.repository.actions))
     assert runtime.repository.consume_action(action_id, "7") is None
     assert runtime.repository.consume_action(action_id, "42") is not None

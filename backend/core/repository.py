@@ -61,6 +61,7 @@ class InMemoryRepository:
         self.platform_settings: dict[str, Any] = {
             "confidence_threshold": 0.85,
             "mismatch_alerts_enabled": True,
+            "gmail_reconcile_limit": 50,
         }
         self.telegram_uploads: dict[str, int] = {}
         self.weekly_summaries: set[str] = set()
@@ -477,6 +478,7 @@ class FirestoreRepository:
         return {
             "confidence_threshold": stored.get("confidence_threshold", 0.85),
             "mismatch_alerts_enabled": stored.get("mismatch_alerts_enabled", True),
+            "gmail_reconcile_limit": stored.get("gmail_reconcile_limit", 50),
         }
 
     def set_platform_settings(self, payload: dict[str, Any]) -> dict[str, Any]:

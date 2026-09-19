@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import html
 import re
 import secrets
 import time
@@ -448,6 +449,78 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
         return
     if text.startswith("/help"):
         runtime.telegram.send_message(chat_id, TELEGRAM_HELP_TEXT)
+        return
+    if text.startswith("/notifications"):
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2 and parts[1].strip().lower() in {"on", "off"}:
+            if chat_id != str(runtime.settings.telegram_admin_chat_id):
+                runtime.telegram.send_message(
+                    chat_id, "Only the configured Telegram admin can change notifications."
+                )
+                return
+            runtime.repository.set_platform_settings(
+                {"mismatch_alerts_enabled": parts[1].strip().lower() == "on"}
+            )
+        settings = runtime.repository.get_platform_settings()
+        enabled = "on" if settings.get("mismatch_alerts_enabled", True) else "off"
+        limit = int(settings.get("gmail_reconcile_limit", runtime.settings.gmail_reconcile_limit))
+        runtime.telegram.send_message(
+            chat_id,
+            f"<b>Notifications:</b> {enabled}\n"
+            f"Hourly email limit: <b>{limit}</b>\n"
+            f"Hourly reconciliation: <code>{html.escape(runtime.settings.gmail_reconcile_schedule)}</code>",
+        )
+        return
+    if text.startswith("/email-limit"):
+        if chat_id != str(runtime.settings.telegram_admin_chat_id):
+            runtime.telegram.send_message(
+                chat_id, "Only the configured Telegram admin can change the email limit."
+            )
+            return
+        parts = text.split(maxsplit=1)
+        try:
+            limit = int(parts[1]) if len(parts) == 2 else 0
+        except ValueError:
+            limit = 0
+        if not 1 <= limit <= 500:
+            runtime.telegram.send_message(chat_id, "Usage: <code>/email-limit 1..500</code>")
+            return
+        runtime.repository.set_platform_settings({"gmail_reconcile_limit": limit})
+        runtime.telegram.send_message(chat_id, f"Hourly email limit: <b>{limit}</b>.")
+        return
+    if text.startswith("/week"):
+        parts = text.split(maxsplit=1)
+        week = parts[1].strip() if len(parts) == 2 else ""
+        record = runtime.repository.get_knowledge_base_week(week)
+        if not record:
+            runtime.telegram.send_message(
+                chat_id, "Usage: <code>/week YYYY-W##</code> or summary not found."
+            )
+            return
+        drive_url = record.get("drive_url")
+        markup = (
+            {"inline_keyboard": [[{"text": "OPEN WEEKLY SUMMARY", "url": drive_url}]]}
+            if isinstance(drive_url, str) and drive_url.startswith(("http://", "https://"))
+            else None
+        )
+        runtime.telegram.send_message(
+            chat_id,
+            f"<b>Weekly summary {html.escape(week)}</b>\n\n"
+            f"{html.escape(record.get('summary_narrative') or 'No narrative is available.')}\n"
+            f"Cases analyzed: <b>{record.get('cases_analyzed', 0)}</b>",
+            reply_markup=markup,
+        )
+        return
+    if text.startswith("/ask"):
+        parts = text.split(maxsplit=2)
+        if len(parts) != 3:
+            runtime.telegram.send_message(chat_id, "Usage: <code>/ask CASE_ID question</code>")
+            return
+        case = runtime.repository.get_case(parts[1].lower())
+        if not case or str(case.get("owner_chat_id") or chat_id) != chat_id:
+            runtime.telegram.send_message(chat_id, "That case is not available in this chat.")
+            return
+        runtime.telegram.send_message(chat_id, runtime.explainer.explain(case, parts[2]))
         return
     if text.startswith("/newcase"):
         token = secrets.token_urlsafe(6).replace("-", "").replace("_", "")

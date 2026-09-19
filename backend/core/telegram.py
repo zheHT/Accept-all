@@ -29,6 +29,8 @@ TELEGRAM_WELCOME_TEXT = (
     "container count, and gross weight).\n"
     "• <b>Correspondence Classification:</b> Automatically triage incoming customer messages "
     "(BL comparison, new SI requests, invoices, and operational queries).\n"
+    "• <b>Incoming Gmail Detection:</b> Gmail push events are processed immediately, with an "
+    "hourly reconciliation safety net and a configurable email limit.\n"
     "• <b>Interactive Reviews & Drafts:</b> Review flagged discrepancies and generate safe correction "
     "drafts for Gmail with one tap.\n\n"
     "<b>How to get started:</b>\n"
@@ -60,7 +62,13 @@ TELEGRAM_HELP_TEXT = (
     "• <b>MANUAL CHECK:</b> Direct link to the live web dashboard\n\n"
     "<b>Ask the AI:</b>\n"
     "Mention any <code>case-&lt;id&gt;</code> (e.g. <code>case-18e47... why was this declined?</code>) "
-    "to query the stored evidence using Gemini!"
+    "to query the stored evidence using Gemini.\n\n"
+    "<b>Operations:</b>\n"
+    "• <code>/notifications</code> — Show alert and hourly email settings\n"
+    "• <code>/notifications on|off</code> — Enable or mute mismatch alerts (admin)\n"
+    "• <code>/email-limit N</code> — Set the hourly reconciliation cap (admin)\n"
+    "• <code>/week YYYY-W##</code> — Read a published weekly summary\n"
+    "• <code>/ask CASE_ID question</code> — Ask for more detail about a case"
 )
 
 
@@ -115,6 +123,10 @@ class TelegramClient:
             {"command": "newcase", "description": "Create a new document triage case"},
             {"command": "submit", "description": "Submit case token for discrepancy verification"},
             {"command": "help", "description": "Show commands & 7-field verification guide"},
+            {"command": "notifications", "description": "Show or change notification settings"},
+            {"command": "email_limit", "description": "Set hourly Gmail reconciliation limit"},
+            {"command": "week", "description": "Read a weekly knowledge summary"},
+            {"command": "ask", "description": "Ask about a case"},
         ]
         return self._call("setMyCommands", {"commands": cmds})
 

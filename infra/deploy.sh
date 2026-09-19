@@ -3,6 +3,7 @@ set -euo pipefail
 
 PROJECT_ID="${1:-gen-lang-client-0866395749}"
 REGION="${2:-asia-southeast1}"
+GMAIL_RECONCILE_SCHEDULE="${GMAIL_RECONCILE_SCHEDULE:-0 * * * *}"
 
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
@@ -28,7 +29,7 @@ gcloud builds submit --project "$PROJECT_ID" --config infra/cloudbuild.yaml --su
 API_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/classall/classall-api:${COMMIT}"
 WORKER_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/classall/classall-worker:${COMMIT}"
 
-COMMON_ENV="APP_ENV=production,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global,REGION=${REGION},FIRESTORE_DATABASE=(default),GCS_BUCKET=${PROJECT_ID}-classall-docs,DOC_TASKS_TOPIC=doc-tasks,GMAIL_EVENTS_TOPIC=gmail-events,DASHBOARD_BASE_URL=https://classall-review-0866395749.web.app"
+COMMON_ENV="APP_ENV=production,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global,REGION=${REGION},FIRESTORE_DATABASE=(default),GCS_BUCKET=${PROJECT_ID}-classall-docs,DOC_TASKS_TOPIC=doc-tasks,GMAIL_EVENTS_TOPIC=gmail-events,GMAIL_RECONCILE_SCHEDULE=${GMAIL_RECONCILE_SCHEDULE},DASHBOARD_BASE_URL=https://classall-review-0866395749.web.app"
 SECRETS_CONFIG="GRADER_INGEST_KEY=grader-ingest-key:latest,APP_SIGNING_SECRET=app-signing-secret:latest"
 for optional_secret in telegram-bot-token telegram-webhook-secret telegram-admin-chat-id gmail-oauth-client-json gmail-address; do
     VERSION=$(gcloud secrets versions list "$optional_secret" --project "$PROJECT_ID" --filter="state=ENABLED" --limit=1 --format="value(name)" 2>/dev/null)
@@ -52,6 +53,7 @@ gcloud run deploy classall-worker \
     --project "$PROJECT_ID" \
     --service-account="classall-worker@${PROJECT_ID}.iam.gserviceaccount.com" \
     --no-allow-unauthenticated \
+    --memory=1Gi \
     --timeout=600 \
     --concurrency=4 \
     --max-instances=10 \
@@ -65,6 +67,7 @@ gcloud run deploy classall-api \
     --project "$PROJECT_ID" \
     --service-account="classall-api@${PROJECT_ID}.iam.gserviceaccount.com" \
     --allow-unauthenticated \
+    --memory=1Gi \
     --timeout=300 \
     --concurrency=40 \
     --max-instances=5 \
@@ -115,6 +118,16 @@ for sub in "doc-tasks-worker" "gmail-events-worker"; do
 done
 
 echo "Configuring Cloud Scheduler jobs..."
+if gcloud scheduler jobs describe gmail-hourly-reconciliation --location "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http gmail-hourly-reconciliation --location "$REGION" --project "$PROJECT_ID" \
+        --schedule="$GMAIL_RECONCILE_SCHEDULE" --time-zone="Asia/Kuala_Lumpur" --uri="${WORKER_URL}/internal/cron/gmail-reconcile" \
+        --http-method=POST --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com"
+else
+    gcloud scheduler jobs create http gmail-hourly-reconciliation --location "$REGION" --project "$PROJECT_ID" \
+        --schedule="$GMAIL_RECONCILE_SCHEDULE" --time-zone="Asia/Kuala_Lumpur" --uri="${WORKER_URL}/internal/cron/gmail-reconcile" \
+        --http-method=POST --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com"
+fi
+
 if gcloud scheduler jobs describe gmail-watch-renewal --location "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
     gcloud scheduler jobs update http gmail-watch-renewal --location "$REGION" --project "$PROJECT_ID" \
         --schedule="0 3 * * *" --time-zone="Asia/Kuala_Lumpur" --uri="${WORKER_URL}/internal/cron/gmail-watch" \

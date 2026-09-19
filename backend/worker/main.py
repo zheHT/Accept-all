@@ -97,6 +97,23 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         )
         return {"history_id": watch["historyId"], "reconciled_cases": len(reconciled)}
 
+    @app.post("/internal/cron/gmail-reconcile")
+    def gmail_reconcile() -> dict[str, Any]:
+        limit = int(
+            runtime.repository.get_platform_settings().get(
+                "gmail_reconcile_limit", runtime.settings.gmail_reconcile_limit
+            )
+        )
+        case_ids = reconcile_recent_gmail(runtime, max_results=limit)
+        if case_ids and runtime.settings.telegram_admin_chat_id:
+            runtime.telegram.send_message(
+                runtime.settings.telegram_admin_chat_id,
+                f"<b>Hourly Gmail reconciliation</b>\n"
+                f"Cases handled: <b>{len(case_ids)}</b>\n"
+                f"Hourly cap: <b>{limit}</b>",
+            )
+        return {"accepted": len(case_ids), "limit": limit, "case_ids": case_ids}
+
     @app.get("/api/cron/summary")
     def weekly_summary() -> dict[str, Any]:
         year, week, _ = datetime.now(UTC).isocalendar()

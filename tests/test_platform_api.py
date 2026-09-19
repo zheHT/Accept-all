@@ -44,6 +44,16 @@ def test_telegram_webhook_secret(runtime):
     )
     assert response.status_code == 200
     assert runtime.telegram.messages[-1][0] == "42"
+    assert "Incoming Gmail Detection" in runtime.telegram.messages[-1][1]
+
+    help_response = client.post(
+        "/api/telegram-webhook",
+        json={"message": {"message_id": 2, "chat": {"id": 42}, "text": "/help"}},
+        headers={"X-Telegram-Bot-Api-Secret-Token": "webhook-secret"},
+    )
+    assert help_response.status_code == 200
+    assert "/week YYYY-W##" in runtime.telegram.messages[-1][1]
+    assert "/ask CASE_ID question" in runtime.telegram.messages[-1][1]
 
 
 def test_telegram_upload_rate_limit(runtime):
@@ -61,6 +71,91 @@ def test_telegram_upload_rate_limit(runtime):
     assert client.post("/api/telegram-webhook", json=update, headers=headers).status_code == 200
     assert client.post("/api/telegram-webhook", json=update, headers=headers).status_code == 200
     assert "Upload limit reached" in runtime.telegram.messages[-1][1]
+
+
+def test_telegram_email_controls_show_and_update_hourly_limit(runtime):
+    runtime.settings.telegram_admin_chat_id = "42"
+    client = TestClient(create_app(runtime))
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "webhook-secret"}
+
+    status = client.post(
+        "/api/telegram-webhook",
+        json={"message": {"chat": {"id": 42}, "text": "/notifications"}},
+        headers=headers,
+    )
+    assert status.status_code == 200
+    assert "Hourly email limit: <b>50</b>" in runtime.telegram.messages[-1][1]
+
+    updated = client.post(
+        "/api/telegram-webhook",
+        json={"message": {"chat": {"id": 42}, "text": "/email-limit 7"}},
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    assert runtime.repository.get_platform_settings()["gmail_reconcile_limit"] == 7
+    assert "Hourly email limit: <b>7</b>" in runtime.telegram.messages[-1][1]
+
+
+def test_telegram_week_command_returns_published_summary(runtime):
+    runtime.repository.save_knowledge_base_week(
+        {
+            "week": "2026-W38",
+            "summary_narrative": "Three recurring consignee issues were found.",
+            "drive_url": "https://docs.google.com/document/d/doc-1/edit",
+        }
+    )
+    client = TestClient(create_app(runtime))
+    response = client.post(
+        "/api/telegram-webhook",
+        json={"message": {"chat": {"id": 42}, "text": "/week 2026-W38"}},
+        headers={"X-Telegram-Bot-Api-Secret-Token": "webhook-secret"},
+    )
+    assert response.status_code == 200
+    assert "Three recurring consignee issues were found." in runtime.telegram.messages[-1][1]
+    assert runtime.telegram.messages[-1][2]["inline_keyboard"][0][0]["url"] == (
+        "https://docs.google.com/document/d/doc-1/edit"
+    )
+
+
+def test_telegram_notifications_changes_are_admin_only(runtime):
+    runtime.settings.telegram_admin_chat_id = "42"
+    client = TestClient(create_app(runtime))
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "webhook-secret"}
+
+    client.post(
+        "/api/telegram-webhook",
+        json={"message": {"chat": {"id": 7}, "text": "/notifications off"}},
+        headers=headers,
+    )
+    assert runtime.repository.get_platform_settings()["mismatch_alerts_enabled"] is True
+
+    client.post(
+        "/api/telegram-webhook",
+        json={"message": {"chat": {"id": 42}, "text": "/notifications off"}},
+        headers=headers,
+    )
+    assert runtime.repository.get_platform_settings()["mismatch_alerts_enabled"] is False
+
+
+def test_telegram_ask_command_explains_owned_case(runtime):
+    runtime.repository.create_case(
+        "case-1234567890abcdef12345678",
+        {"owner_chat_id": "42", "source_type": "telegram", "subject": "Question"},
+    )
+    runtime.explainer.explain = lambda case, question: f"Answer for {question}"  # type: ignore[method-assign]
+    client = TestClient(create_app(runtime))
+    response = client.post(
+        "/api/telegram-webhook",
+        json={
+            "message": {
+                "chat": {"id": 42},
+                "text": "/ask case-1234567890abcdef12345678 why?",
+            }
+        },
+        headers={"X-Telegram-Bot-Api-Secret-Token": "webhook-secret"},
+    )
+    assert response.status_code == 200
+    assert runtime.telegram.messages[-1][1] == "Answer for why?"
 
 
 def test_stale_gmail_decline_is_rejected(runtime):
