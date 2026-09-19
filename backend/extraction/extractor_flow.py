@@ -61,8 +61,10 @@ async def extract_document(
                 ) from exc
     finally:
         if owned_client:
-            await active_client.aio.aclose()
-            active_client.close()
+            try:
+                await active_client.aio.aclose()
+            finally:
+                active_client.close()
 
 
 def _contents(document: PreparedDocument) -> list[str | types.Part]:

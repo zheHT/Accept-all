@@ -19,13 +19,15 @@ Return total container count as an integer. Convert MT/MTS to kilograms and
 remove thousands separators from kilogram values.
 
 LABEL ALIASES
-- shipper: Shipper, Shipper/Exporter, Exporter
-- consignee: Consignee, Consigned To, To the Order of
-- notify_party: Notify Party, Notify, Also Notify
+- shipper: Shipper, Shipper/Exporter, Exporter, Shipper (Principal or Seller)
+- consignee: Consignee, Consigned To, To the Order of, Consignee (Non-Negotiable)
+- notify_party: Notify Party, Notify, Also Notify, Notify Party/Intermediate
+  Consignee
 - port_of_loading: Port of Loading, Loading Port, POL
 - port_of_discharge: Port of Discharge, Discharge Port, POD
 - container_count: Container Count, No. of Containers, Number of Containers,
-  Total Containers
-- gross_weight_kg: Gross Weight, Gross Wt, G.W., Total Gross Weight
+  Total Containers, No. of Containers or Packages
+- gross_weight_kg: Gross Weight, Gross Wt, G.W., Total Gross Weight, Gross
+  Weight (KG), Gross WT (KGS), Gross Weight毛重(KGS)
 
 Return all seven required keys and no additional keys.

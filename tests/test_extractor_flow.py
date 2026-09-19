@@ -1,8 +1,10 @@
 from types import SimpleNamespace
+from pathlib import Path
 
 import httpx
 import pytest
 
+import backend.extraction.extractor_flow as extractor_flow
 from backend.extraction.extractor_flow import (
     DocumentExtractionError,
     GeminiServiceError,
@@ -39,6 +41,23 @@ class FakeModels:
 class FakeClient:
     def __init__(self, outcomes):
         self.aio = SimpleNamespace(models=FakeModels(outcomes))
+
+
+class OwnedFakeClient(FakeClient):
+    def __init__(self, outcomes, *, async_close_error=None):
+        super().__init__(outcomes)
+        self.async_close_error = async_close_error
+        self.async_close_calls = 0
+        self.close_calls = 0
+        self.aio.aclose = self.aclose
+
+    async def aclose(self):
+        self.async_close_calls += 1
+        if self.async_close_error:
+            raise self.async_close_error
+
+    def close(self):
+        self.close_calls += 1
 
 
 @pytest.fixture
@@ -151,3 +170,55 @@ async def test_connection_failure_is_a_service_error():
 
     with pytest.raises(GeminiServiceError):
         await extract_document(text_document(), client=fake_client, sleep=no_sleep)
+
+
+@pytest.mark.asyncio
+async def test_owned_client_is_closed_and_request_uses_runtime_contract(
+    monkeypatch, valid_document
+):
+    owned_client = OwnedFakeClient([FakeResponse(parsed=valid_document)])
+    monkeypatch.setattr(extractor_flow.genai, "Client", lambda: owned_client)
+
+    result = await extract_document(text_document(), sleep=no_sleep)
+
+    request = owned_client.aio.models.requests[0]
+    config = request["config"]
+    instruction = (
+        Path(__file__).resolve().parents[1] / "backend" / "skills" / "extractor.md"
+    ).read_text(encoding="utf-8")
+    assert result == valid_document
+    assert owned_client.async_close_calls == 1
+    assert owned_client.close_calls == 1
+    assert request["model"] == "gemini-2.5-flash"
+    assert config.temperature == 0.0
+    assert config.response_mime_type == "application/json"
+    assert config.response_schema is ExtractedDocument
+    assert config.system_instruction == instruction
+
+
+@pytest.mark.asyncio
+async def test_owned_client_sync_close_runs_after_async_close_failure(
+    monkeypatch, valid_document
+):
+    owned_client = OwnedFakeClient(
+        [FakeResponse(parsed=valid_document)],
+        async_close_error=RuntimeError("async close failed"),
+    )
+    monkeypatch.setattr(extractor_flow.genai, "Client", lambda: owned_client)
+
+    with pytest.raises(RuntimeError, match="async close failed"):
+        await extract_document(text_document(), sleep=no_sleep)
+
+    assert owned_client.async_close_calls == 1
+    assert owned_client.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_injected_client_is_not_closed_by_extractor(valid_document):
+    client = OwnedFakeClient([FakeResponse(parsed=valid_document)])
+
+    result = await extract_document(text_document(), client=client, sleep=no_sleep)
+
+    assert result == valid_document
+    assert client.async_close_calls == 0
+    assert client.close_calls == 0
