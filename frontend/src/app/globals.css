@@ -1,0 +1,412 @@
+@import "tailwindcss";
+
+/* Class-based dark mode: the <html> element carries `.dark`. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * ShipVerify design tokens.
+ *
+ * Every colour is a runtime CSS variable, so switching theme only swaps the
+ * values in `.dark` — components keep using the same `surface`, `ink`, `line`
+ * and status names. Status hues are defined as a 4-step ramp used consistently:
+ * 50 = tint background, 200 = border, 500 = solid indicator, 700 = text.
+ */
+:root {
+  --surface: #ffffff;
+  --canvas: #f3f7f8;
+  --line: #e4eaeb;
+  --line-strong: #d0d9da;
+  /* Hairline edge of a glass panel. */
+  --edge: rgb(255 255 255 / 0.75);
+  --overlay: rgb(13 27 30 / 0.35);
+
+  --ink-900: #0d1b1e;
+  --ink-700: #2a3b3f;
+  --ink-500: #5c6f74;
+  --ink-400: #7c8f94;
+  --ink-300: #a4b3b7;
+
+  --brand-50: #eff7f6;
+  --brand-100: #d7ebe9;
+  --brand-200: #b0d7d4;
+  --brand-300: #7ebbb7;
+  --brand-400: #4a9e99;
+  --brand-500: #2b837f;
+  --brand-600: #1d6a66;
+  --brand-700: #175452;
+  --brand-800: #123f3e;
+  --brand-900: #0d2c2b;
+
+  --tide-400: #6d9fe0;
+  --tide-500: #4a7fc5;
+  --tide-600: #37619b;
+  --plum-400: #9a7de6;
+  --plum-500: #7c5cd6;
+  --plum-600: #6344b4;
+
+  --matched-50: #ecfdf3;
+  --matched-200: #a9e3c3;
+  --matched-500: #12a35f;
+  --matched-700: #0a6b3f;
+
+  --mismatch-50: #fef1f2;
+  --mismatch-200: #f8c8ce;
+  --mismatch-500: #d8344c;
+  --mismatch-700: #99182d;
+
+  --review-50: #fff8ea;
+  --review-200: #f6dda3;
+  --review-500: #d08700;
+  --review-700: #8a5a00;
+
+  --processing-50: #eef6ff;
+  --processing-200: #b8d6f7;
+  --processing-500: #2a76cc;
+  --processing-700: #1a4e8a;
+
+  --failed-50: #fdf3ee;
+  --failed-200: #f0cdb6;
+  --failed-500: #b95c1c;
+  --failed-700: #7c3a0e;
+
+  /* Frosted panels and primary button, kept separate so dark stays legible. */
+  --glass-bg: rgb(255 255 255 / 0.72);
+  --glass-solid-bg: rgb(255 255 255 / 0.9);
+  --field-bg: rgb(255 255 255 / 0.7);
+  --field-bg-hover: rgb(255 255 255 / 0.9);
+  --btn-from: #2b837f;
+  --btn-to: #175452;
+  --btn-from-hover: #4a9e99;
+  --btn-to-hover: #1d6a66;
+
+  --page-gradient:
+    radial-gradient(900px 620px at 10% -8%, rgb(74 158 153 / 0.28), transparent 62%),
+    radial-gradient(820px 520px at 95% -4%, rgb(109 159 224 / 0.24), transparent 64%),
+    radial-gradient(760px 560px at 80% 100%, rgb(208 135 0 / 0.12), transparent 60%),
+    linear-gradient(180deg, #f7fbfb 0%, #eff5f6 48%, #eaf1f2 100%);
+
+  --shadow-card: 0 1px 2px 0 rgb(13 27 30 / 0.03), 0 10px 28px -14px rgb(13 27 30 / 0.16);
+  --shadow-card-lg: 0 2px 6px -2px rgb(13 27 30 / 0.06), 0 28px 56px -28px rgb(13 27 30 / 0.28);
+  --shadow-accent: 0 6px 18px -6px rgb(29 106 102 / 0.45);
+  --sheen: inset 0 1px 0 0 rgb(255 255 255 / 0.65);
+}
+
+.dark {
+  /* Cards sit clearly above the canvas in dark mode: a lighter, nearly opaque
+     panel with a brighter hairline, rather than a faint tint on near-black. */
+  --surface: #192a29;
+  --canvas: #070d0d;
+  --line: #2c4245;
+  --line-strong: #3f5c61;
+  --edge: rgb(255 255 255 / 0.14);
+  --overlay: rgb(0 0 0 / 0.66);
+
+  --ink-900: #e9f3f2;
+  --ink-700: #c0d2d1;
+  --ink-500: #93a8a8;
+  --ink-400: #7c9192;
+  --ink-300: #5f7577;
+
+  /* Tint end of the ramp goes dark; the text end goes light. */
+  --brand-50: #102a28;
+  --brand-100: #16352f;
+  --brand-200: #245049;
+  --brand-300: #3f7b74;
+  --brand-400: #57a39c;
+  --brand-500: #6fbdb5;
+  --brand-600: #8ed0c9;
+  --brand-700: #a9ded8;
+  --brand-800: #c6ebe6;
+  --brand-900: #e2f6f3;
+
+  --tide-400: #7fa9e4;
+  --tide-500: #9cc0ee;
+  --tide-600: #bcd6f5;
+  --plum-400: #a98fee;
+  --plum-500: #bda6f4;
+  --plum-600: #d2c2f8;
+
+  --matched-50: #0e2a1e;
+  --matched-200: #1e5940;
+  --matched-500: #33c383;
+  --matched-700: #8fe3b6;
+
+  --mismatch-50: #30151a;
+  --mismatch-200: #692733;
+  --mismatch-500: #f4677f;
+  --mismatch-700: #ffb7c2;
+
+  --review-50: #2e2311;
+  --review-200: #664c18;
+  --review-500: #edb03c;
+  --review-700: #ffdb95;
+
+  --processing-50: #112538;
+  --processing-200: #1e456c;
+  --processing-500: #5ba1e8;
+  --processing-700: #aed2f7;
+
+  --failed-50: #2f1d12;
+  --failed-200: #66391b;
+  --failed-500: #dd8846;
+  --failed-700: #f7c9a4;
+
+  --glass-bg: rgb(27 45 43 / 0.9);
+  --glass-solid-bg: rgb(25 42 41 / 0.97);
+  /* Inputs stay darker than the card they sit on, so they read as recessed. */
+  --field-bg: rgb(10 18 18 / 0.7);
+  --field-bg-hover: rgb(10 18 18 / 0.92);
+  --btn-from: #2b837f;
+  --btn-to: #17504e;
+  --btn-from-hover: #37968f;
+  --btn-to-hover: #1d6a66;
+
+  --page-gradient:
+    radial-gradient(900px 620px at 10% -8%, rgb(42 120 116 / 0.28), transparent 62%),
+    radial-gradient(820px 520px at 95% -4%, rgb(44 78 128 / 0.26), transparent 64%),
+    radial-gradient(760px 560px at 80% 100%, rgb(122 80 12 / 0.16), transparent 60%),
+    linear-gradient(180deg, #0b1416 0%, #091110 50%, #070d0d 100%);
+
+  --shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.5), 0 12px 30px -14px rgb(0 0 0 / 0.7);
+  --shadow-card-lg: 0 2px 6px -2px rgb(0 0 0 / 0.6), 0 30px 60px -28px rgb(0 0 0 / 0.85);
+  --shadow-accent: 0 6px 18px -6px rgb(0 0 0 / 0.65);
+  --sheen: inset 0 1px 0 0 rgb(255 255 255 / 0.09);
+}
+
+@theme inline {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, "Noto Sans", sans-serif;
+  --font-mono:
+    ui-monospace, "SFMono-Regular", "JetBrains Mono", "Cascadia Mono", Menlo,
+    Consolas, monospace;
+
+  --color-surface: var(--surface);
+  --color-canvas: var(--canvas);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-edge: var(--edge);
+  --color-overlay: var(--overlay);
+
+  --color-ink-900: var(--ink-900);
+  --color-ink-700: var(--ink-700);
+  --color-ink-500: var(--ink-500);
+  --color-ink-400: var(--ink-400);
+  --color-ink-300: var(--ink-300);
+
+  --color-brand-50: var(--brand-50);
+  --color-brand-100: var(--brand-100);
+  --color-brand-200: var(--brand-200);
+  --color-brand-300: var(--brand-300);
+  --color-brand-400: var(--brand-400);
+  --color-brand-500: var(--brand-500);
+  --color-brand-600: var(--brand-600);
+  --color-brand-700: var(--brand-700);
+  --color-brand-800: var(--brand-800);
+  --color-brand-900: var(--brand-900);
+
+  --color-tide-400: var(--tide-400);
+  --color-tide-500: var(--tide-500);
+  --color-tide-600: var(--tide-600);
+  --color-plum-400: var(--plum-400);
+  --color-plum-500: var(--plum-500);
+  --color-plum-600: var(--plum-600);
+
+  --color-matched-50: var(--matched-50);
+  --color-matched-200: var(--matched-200);
+  --color-matched-500: var(--matched-500);
+  --color-matched-700: var(--matched-700);
+
+  --color-mismatch-50: var(--mismatch-50);
+  --color-mismatch-200: var(--mismatch-200);
+  --color-mismatch-500: var(--mismatch-500);
+  --color-mismatch-700: var(--mismatch-700);
+
+  --color-review-50: var(--review-50);
+  --color-review-200: var(--review-200);
+  --color-review-500: var(--review-500);
+  --color-review-700: var(--review-700);
+
+  --color-processing-50: var(--processing-50);
+  --color-processing-200: var(--processing-200);
+  --color-processing-500: var(--processing-500);
+  --color-processing-700: var(--processing-700);
+
+  --color-failed-50: var(--failed-50);
+  --color-failed-200: var(--failed-200);
+  --color-failed-500: var(--failed-500);
+  --color-failed-700: var(--failed-700);
+
+  --shadow-glass: var(--shadow-card);
+  --shadow-glass-lg: var(--shadow-card-lg);
+  --shadow-brand: var(--shadow-accent);
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    min-height: 100vh;
+    color: var(--ink-900);
+    background-color: var(--canvas);
+    background-image: var(--page-gradient);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background-color: var(--brand-200);
+    color: var(--ink-900);
+  }
+
+  *:focus-visible {
+    outline: 2px solid var(--brand-400);
+    outline-offset: 2px;
+  }
+
+  /* Slim themed scrollbars so long panels don't get a heavy grey gutter. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--line-strong);
+    background-clip: content-box;
+    border: 3px solid transparent;
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--ink-300);
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  /* Frosted panel: the base surface for every card, table, and popover. */
+  .glass {
+    border-radius: var(--radius-2xl);
+    border: 1px solid var(--edge);
+    background-color: var(--glass-bg);
+    box-shadow: var(--shadow-card);
+    backdrop-filter: blur(24px) saturate(1.5);
+  }
+
+  /* More opaque, for popovers and dense data regions. */
+  .glass-solid {
+    border-radius: var(--radius-2xl);
+    border: 1px solid var(--edge);
+    background-color: var(--glass-solid-bg);
+    box-shadow: var(--shadow-card);
+    backdrop-filter: blur(24px) saturate(1.5);
+  }
+
+  .glass-hover {
+    transition: all 200ms ease;
+  }
+  .glass-hover:hover {
+    transform: translateY(-2px);
+    background-color: var(--glass-solid-bg);
+    box-shadow: var(--shadow-card-lg);
+  }
+
+  /* Hairline highlight along the top edge sells the glass thickness. */
+  .glass-sheen {
+    box-shadow: var(--sheen), var(--shadow-card);
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-[13px] font-semibold text-white transition-all duration-200 active:translate-y-px;
+    background-image: linear-gradient(to bottom, var(--btn-from), var(--btn-to));
+    box-shadow: var(--shadow-accent);
+  }
+  .btn-primary:hover {
+    background-image: linear-gradient(to bottom, var(--btn-from-hover), var(--btn-to-hover));
+    box-shadow: var(--shadow-card-lg);
+  }
+
+  /* Controls use the visible hairline, not the glass edge: a translucent white
+     border disappears when the control sits on top of a white panel. */
+  .btn-glass {
+    @apply inline-flex items-center gap-2 rounded-xl px-3 py-2 text-[13px] font-medium text-ink-700 transition-all duration-200;
+    border: 1px solid var(--line-strong);
+    background-color: var(--field-bg);
+    box-shadow: var(--shadow-card);
+    backdrop-filter: blur(8px);
+  }
+  .btn-glass:hover {
+    background-color: var(--field-bg-hover);
+    color: var(--ink-900);
+  }
+
+  .btn-quiet {
+    @apply inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-ink-500 transition-colors;
+  }
+  .btn-quiet:hover {
+    background-color: var(--field-bg-hover);
+    color: var(--ink-900);
+  }
+
+  .field-glass {
+    @apply w-full rounded-xl text-[13px] text-ink-900 transition-colors;
+    border: 1px solid var(--line-strong);
+    background-color: var(--field-bg);
+    box-shadow: var(--shadow-card);
+    backdrop-filter: blur(8px);
+  }
+  .field-glass::placeholder {
+    color: var(--ink-300);
+  }
+  .field-glass:hover,
+  .field-glass:focus {
+    background-color: var(--field-bg-hover);
+  }
+
+  /* Section eyebrow label. */
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-400;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    opacity: 0.4;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}

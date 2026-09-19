@@ -1,7 +1,37 @@
+# Python environments & caches
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+*.so
 .pytest_cache/
-data
-submission.json
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables & secrets
 .env
+.env.*
+!.env.example
+credentials*.json
+
+# Node & Frontend artifacts
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+dist/
+.vite/
+frontend/next-env.d.ts
+*.tsbuildinfo
+frontend/*.tsbuildinfo
+.preview/
+
+# Competition datasets & submissions
+data/
+data_v2/
+submission.json
+submissions/
+*.log
