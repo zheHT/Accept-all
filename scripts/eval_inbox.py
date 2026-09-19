@@ -1,248 +1,193 @@
 #!/usr/bin/env python3
-"""
-Batch Evaluation Runner for Maritime Shipping Email Classifier & Triage Agent.
+"""Restartable batch evaluator for the shipping inbox."""
 
-Integrates with loader.py to evaluate against the shipping inbox dataset
-(either local 'data' folder or docker HTTP server 'http://localhost:8080')
-and outputs a submission dictionary matching sample_submission.json.
-"""
 import argparse
+import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Callable, Iterable
 
-# Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from loader import Inbox
 from backend.agents.classifier_flow import classify_email
+from backend.extraction import DocumentInput, DocumentPairResult, process_document_pair
 from backend.models.schemas import EmailCategory, SubmissionItem
 from backend.utils.attachment_sniffer import inspect_attachment
 
-# Category mapping for server scoring compatibility
-SERVER_CATEGORY_MAP = {
-    "DOCUMENT_COMPARISON": "BL_COMPARISON",
-    "NEW_SI_REQUEST": "SI_REQUEST",
-    "INVOICE_QUERY": "INVOICE_QUERY",
-    "GENERAL": "GENERAL",
-    "SPAM": "SPAM",
+
+CATEGORY_MAP = {
+    EmailCategory.DOCUMENT_COMPARISON: "BL_COMPARISON",
+    EmailCategory.NEW_SI_REQUEST: "SI_REQUEST",
+    EmailCategory.INVOICE_QUERY: "INVOICE_QUERY",
+    EmailCategory.GENERAL: "GENERAL",
+    EmailCategory.SPAM: "SPAM",
 }
+_UNREADABLE_PREVIEW = "[Unreadable or Corrupted File]"
 
 
-def print_table_header():
-    header = f"| {'Email ID':<12} | {'Category':<22} | {'Confidence':<10} | {'Candidate?':<11} | {'Missing Att?':<12} |"
-    sep = f"|{'-'*14}|{'-'*24}|{'-'*12}|{'-'*13}|{'-'*14}|"
-    print(sep)
-    print(header)
-    print(sep)
+def _neutral_item(category: str) -> dict[str, object]:
+    return SubmissionItem(
+        category=category,
+        status="OK",
+        review_reason=None,
+        has_defect=False,
+        defect_fields=[],
+    ).model_dump()
 
 
-def print_table_row(email_id: str, category: str, confidence: float, is_candidate: bool, missing_flag: bool):
-    cand_str = "YES (Doc)" if is_candidate else "No"
-    miss_str = "FLAGGED" if missing_flag else "OK"
-    row = f"| {email_id:<12} | {category:<22} | {confidence:<10.2f} | {cand_str:<11} | {miss_str:<12} |"
-    print(row)
+def _comparison_item(category: str, result: DocumentPairResult) -> dict[str, object]:
+    validation = result.validation
+    return SubmissionItem(
+        category=category,
+        status=validation.status.value,
+        review_reason=(validation.review_reason.value if validation.review_reason else None),
+        has_defect=validation.has_defect,
+        defect_fields=validation.defect_fields,
+    ).model_dump()
 
 
-def evaluate_inbox(
+def _document_inputs(
+    documents: Iterable[tuple[str, bytes]],
+) -> tuple[DocumentInput | None, DocumentInput | None]:
+    """Return the explicitly named SI and BL documents, without inference."""
+    si_input = None
+    bl_input = None
+    for path, data in documents:
+        filename = Path(path).name
+        normalized_name = filename.casefold()
+        document = DocumentInput(filename=filename, data=data)
+        if si_input is None and "_si." in normalized_name:
+            si_input = document
+        elif bl_input is None and "_bl." in normalized_name:
+            bl_input = document
+    return si_input, bl_input
+
+
+def _classify_with_retry(
+    classifier: Callable[..., object], *, sleep: Callable[[float], None] = time.sleep, **kwargs: object
+) -> object:
+    """Retry only transient synchronous classifier failures, up to three attempts."""
+    for attempt in range(3):
+        try:
+            return classifier(**kwargs)
+        except Exception as exc:
+            code = getattr(exc, "code", getattr(exc, "status_code", None))
+            transient = isinstance(exc, TimeoutError) or code == 429 or (
+                isinstance(code, int) and 500 <= code < 600
+            )
+            if not transient or attempt == 2:
+                raise
+            sleep(2**attempt)
+    raise AssertionError("retry loop exited without a result")
+
+
+def _write_checkpoint(path: Path, submission: dict[str, dict[str, object]]) -> None:
+    """Persist the complete current state without exposing a partial JSON file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(submission, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _load_checkpoint(path: Path, resume: bool) -> dict[str, dict[str, object]]:
+    if not resume or not path.exists():
+        return {}
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("Checkpoint must contain a JSON object keyed by email ID.")
+    return value
+
+
+async def evaluate_inbox(
     source: str = "data",
-    max_emails: int = None,
-    output_file: str = "submission.json",
-    server_compat: bool = False,
+    *,
+    inbox=None,
+    output_file: Path = Path("submission.json"),
+    max_emails: int | None = None,
+    resume: bool = False,
     auto_submit: bool = True,
-) -> Dict[str, Any]:
-    """Run batch triage classification over inbox emails and produce submission dict."""
-    print(f"\n=======================================================")
-    print(f" Maritime Shipping Email Triage Evaluator")
-    print(f" Source: {source}")
-    print(f" Server Compatibility Mapping: {server_compat}")
-    print(f"=======================================================\n")
+    classifier=classify_email,
+    pair_processor=process_document_pair,
+) -> dict[str, dict[str, object]]:
+    """Classify emails and validate only comparison candidates, sequentially."""
+    active_inbox = inbox or Inbox(source)
+    output_path = Path(output_file)
+    submission = _load_checkpoint(output_path, resume)
+    emails = active_inbox.emails()
+    selected_emails = emails if max_emails is None else emails[:max_emails]
 
-    inbox = Inbox(source)
-    all_emails = inbox.emails()
-    total_available = len(all_emails)
-    print(f"Discovered {total_available} emails from source.")
+    for index, email in enumerate(selected_emails, 1):
+        email_id = email.get("email_id", f"email_{index:03d}")
+        if resume and email_id in submission:
+            continue
 
-    if max_emails and max_emails > 0:
-        eval_emails = all_emails[:max_emails]
-        print(f"Evaluating subset of {len(eval_emails)} emails (max_emails={max_emails}).")
-    else:
-        eval_emails = all_emails
-
-    submission: Dict[str, Dict[str, Any]] = {}
-    stats = {
-        "DOCUMENT_COMPARISON": 0,
-        "NEW_SI_REQUEST": 0,
-        "INVOICE_QUERY": 0,
-        "GENERAL": 0,
-        "SPAM": 0,
-        "CANDIDATES": 0,
-        "MISSING_ATTACHMENTS": 0,
-    }
-
-    print_table_header()
-
-    for idx, email_record in enumerate(eval_emails, 1):
-        email_id = email_record.get("email_id", f"email_{idx:03d}")
-        subject = email_record.get("subject", "")
-        sender = email_record.get("from", email_record.get("sender", ""))
-        body = email_record.get("body", "")
-        attachment_paths = email_record.get("attachments", []) or []
-
-        # Extract attachment previews
-        attachment_previews: Dict[str, str] = {}
-        for att_path in attachment_paths:
-            filename = os.path.basename(att_path)
+        attachment_previews: dict[str, str] = {}
+        documents: list[tuple[str, bytes]] = []
+        for attachment_path in email.get("attachments", []) or []:
+            filename = Path(attachment_path).name
             try:
-                # Attempt to read raw bytes from inbox
-                raw_bytes = inbox.read_bytes(att_path)
-                preview = inspect_attachment(filename, raw_bytes)
-                attachment_previews[filename] = preview
+                data = active_inbox.read_bytes(attachment_path)
             except Exception:
-                try:
-                    # Fallback to reading text
-                    text = inbox.read_text(att_path)
-                    preview = inspect_attachment(filename, text)
-                    attachment_previews[filename] = preview
-                except Exception:
-                    attachment_previews[filename] = "[Unreadable or Corrupted File]"
+                attachment_previews[filename] = _UNREADABLE_PREVIEW
+                continue
+            documents.append((attachment_path, data))
+            try:
+                attachment_previews[filename] = inspect_attachment(filename, data)
+            except Exception:
+                attachment_previews[filename] = _UNREADABLE_PREVIEW
 
-        # Call classifier agent
-        result = classify_email(
+        classification = _classify_with_retry(
+            classifier,
             email_id=email_id,
-            subject=subject,
-            sender=sender,
-            body=body,
+            subject=email.get("subject", ""),
+            sender=email.get("from", email.get("sender", "")),
+            body=email.get("body", ""),
             attachment_previews=attachment_previews,
         )
-
-        category_key = result.category.value
-        stats[category_key] = stats.get(category_key, 0) + 1
-        if result.is_comparison_candidate:
-            stats["CANDIDATES"] += 1
-        if result.missing_attachments_flag:
-            stats["MISSING_ATTACHMENTS"] += 1
-
-        print_table_row(
-            email_id=email_id,
-            category=category_key,
-            confidence=result.confidence,
-            is_candidate=result.is_comparison_candidate,
-            missing_flag=result.missing_attachments_flag,
-        )
-
-        # Determine submission category name
-        sub_category = category_key
-        if server_compat or inbox.is_http:
-            sub_category = SERVER_CATEGORY_MAP.get(category_key, category_key)
-
-        # Build submission item matching sample_submission.json
-        if result.is_comparison_candidate:
-            if result.missing_attachments_flag:
-                item = SubmissionItem(
-                    category=sub_category,
-                    status="NEEDS_REVIEW",
-                    review_reason="Missing or unreadable attachment files",
-                    has_defect=None,
-                    defect_fields=[],
-                )
-            else:
-                item = SubmissionItem(
-                    category=sub_category,
-                    status="OK",
-                    review_reason=None,
-                    has_defect=False,
-                    defect_fields=[],
-                )
+        category = CATEGORY_MAP[classification.category]
+        if classification.is_comparison_candidate:
+            si_input, bl_input = _document_inputs(documents)
+            pair_result = await pair_processor(si_input, bl_input)
+            item = _comparison_item(category, pair_result)
         else:
-            item = SubmissionItem(
-                category=sub_category,
-                status="OK",
-                review_reason=None,
-                has_defect=False,
-                defect_fields=[],
-            )
+            item = _neutral_item(category)
 
-        submission[email_id] = item.model_dump()
+        submission[email_id] = item
+        _write_checkpoint(output_path, submission)
 
-    sep = f"|{'-'*14}|{'-'*24}|{'-'*12}|{'-'*13}|{'-'*14}|"
-    print(sep)
-
-    # Summary statistics
-    print("\n--- Operational Triage Summary ---")
-    print(f"Total Evaluated:         {len(eval_emails)}")
-    print(f"DOCUMENT_COMPARISON:    {stats['DOCUMENT_COMPARISON']} (Candidates for discrepancy check)")
-    print(f"NEW_SI_REQUEST:         {stats['NEW_SI_REQUEST']}")
-    print(f"INVOICE_QUERY:          {stats['INVOICE_QUERY']}")
-    print(f"GENERAL:                {stats['GENERAL']}")
-    print(f"SPAM:                   {stats['SPAM']}")
-    print(f"Comparison Candidates:  {stats['CANDIDATES']}")
-    print(f"Missing Attachments:    {stats['MISSING_ATTACHMENTS']}")
-    print("-----------------------------------\n")
-
-    # Save to output file
-    out_path = Path(output_file)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(submission, f, indent=2)
-    print(f"Saved submission output to: {out_path.resolve()}")
-
-    # Submit to HTTP server if targeting server and auto_submit is True
-    if inbox.is_http and auto_submit:
-        try:
-            print(f"\nSubmitting results to server at {source}/submit...")
-            scoreboard = inbox.submit(submission)
-            print("\n=======================================================")
-            print(" Server Evaluation Scoreboard")
-            print("=======================================================")
-            print(json.dumps(scoreboard, indent=2))
-        except Exception as e:
-            print(f"Server submission failed: {e}")
-
+    if active_inbox.is_http and auto_submit:
+        active_inbox.submit(submission)
     return submission
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Maritime Shipping Email Classifier & Triage Batch Evaluator"
+        description="Maritime Shipping Email Triage Batch Evaluator"
     )
-    parser.add_argument(
-        "--source",
-        default="data",
-        help="Path to local data folder (with inbox/) or server URL (default: 'data')",
-    )
-    parser.add_argument(
-        "--max",
-        type=int,
-        default=None,
-        help="Maximum number of emails to evaluate (default: all)",
-    )
-    parser.add_argument(
-        "--output",
-        default="submission.json",
-        help="Output path for submission JSON (default: 'submission.json')",
-    )
-    parser.add_argument(
-        "--server-compat",
-        action="store_true",
-        help="Map categories to server format (DOCUMENT_COMPARISON -> BL_COMPARISON, NEW_SI_REQUEST -> SI_REQUEST)",
-    )
-    parser.add_argument(
-        "--no-submit",
-        action="store_true",
-        help="Do not submit to HTTP server even if source is HTTP URL",
-    )
+    parser.add_argument("--source", default="data")
+    parser.add_argument("--output", default="submission.json")
+    parser.add_argument("--max", dest="max_emails", type=int, default=None)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--no-submit", action="store_true")
+    return parser
 
-    args = parser.parse_args()
-    evaluate_inbox(
-        source=args.source,
-        max_emails=args.max,
-        output_file=args.output,
-        server_compat=args.server_compat,
-        auto_submit=not args.no_submit,
+
+def main() -> None:
+    args = build_parser().parse_args()
+    asyncio.run(
+        evaluate_inbox(
+            source=args.source,
+            output_file=Path(args.output),
+            max_emails=args.max_emails,
+            resume=args.resume,
+            auto_submit=not args.no_submit,
+        )
     )
 
 
