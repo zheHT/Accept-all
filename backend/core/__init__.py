@@ -1,1 +1,1 @@
-"""Shared ClassAll domain and infrastructure code."""
+"""Shared ShipVerify domain and infrastructure code."""

@@ -10,7 +10,7 @@ from backend.core.schemas import TERMINAL_STATES
 
 
 def ingest_gmail_message(runtime: Runtime, message_id: str) -> str | None:
-    """Ingest a Gmail message into the ClassAll processing pipeline using canonical EmailEnvelope."""
+    """Ingest a Gmail message into the ShipVerify processing pipeline using canonical EmailEnvelope."""
     case_id = stable_case_id("gmail", message_id)
     existing = runtime.repository.get_case(case_id)
     if existing and existing.get("processing_state") in {s.value for s in TERMINAL_STATES}:

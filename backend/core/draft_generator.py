@@ -64,7 +64,7 @@ def deterministic_correction_draft(
         "Thank you for your prompt attention to this matter.\n\n"
         "Best regards,\n"
         "Documentation Verification Team\n"
-        "ClassAll Platform"
+        "ShipVerify Platform"
     )
     return subject, body
 
@@ -164,7 +164,7 @@ def generate_si_return_draft(
         "or amendments are required prior to final vessel cutoff.\n\n"
         "Best regards,\n"
         "Documentation Verification Team\n"
-        "ClassAll Platform"
+        "ShipVerify Platform"
     )
     return subject, body
 
@@ -191,7 +191,7 @@ def generate_invoice_response_draft(
         "Thank you for your patience.\n\n"
         "Best regards,\n"
         "Finance & Accounts Team\n"
-        "ClassAll Platform"
+        "ShipVerify Platform"
     )
     return subject, body
 
@@ -216,6 +216,6 @@ def generate_general_response_draft(
         f"{extra_text}\n\n"
         "Best regards,\n"
         "Customer Service Team\n"
-        "ClassAll Platform"
+        "ShipVerify Platform"
     )
     return subject, body

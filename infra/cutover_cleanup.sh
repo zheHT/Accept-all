@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "$CONFIRM_CUTOVER" != "true" ]; then
-    echo "Error: Pass --confirm-cutover only after every ClassAll release gate passes" >&2
+    echo "Error: Pass --confirm-cutover only after every ShipVerify release gate passes" >&2
     exit 1
 fi
 

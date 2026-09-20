@@ -106,7 +106,7 @@ def test_api_knowledge_base_routes(runtime: Runtime) -> None:
     assert isinstance(registry_resp.json(), list)
 
     # The removed document preview route must not be available.
-    preview_resp = api.get("/api/knowledge-base/preview/ClassAll_Assumptions_2026-W39")
+    preview_resp = api.get("/api/knowledge-base/preview/ShipVerify_Assumptions_2026-W39")
     assert preview_resp.status_code == 404
 
 

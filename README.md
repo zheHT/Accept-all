@@ -1,8 +1,8 @@
-# ClassAll Platform
+# ShipVerify Platform
 
 > **A production-oriented hackathon prototype with enterprise safety patterns.**
 
-ClassAll is an intelligent maritime shipping correspondence triage and document reconciliation platform. It ingests high-volume customer emails, classifies correspondence into operational categories, extracts and cross-checks shipping instructions against draft bills of lading across a strict 7-field verified contract, and orchestrates human-in-the-loop review with automated Gmail draft replies.
+ShipVerify is an intelligent maritime shipping correspondence triage and document reconciliation platform. It ingests high-volume customer emails, classifies correspondence into operational categories, extracts and cross-checks shipping instructions against draft bills of lading across a strict 7-field verified contract, and orchestrates human-in-the-loop review with automated Gmail draft replies.
 
 ---
 
@@ -126,7 +126,7 @@ For acceptance testing, compare two multi-page PDFs, switch only one pane to tex
 - **Firebase CLI**: `firebase-tools` for hosting deployments
 
 ### Secret Management
-ClassAll separates mandatory core secrets from optional integration secrets:
+ShipVerify separates mandatory core secrets from optional integration secrets:
 
 #### Mandatory Core Secrets (GCP Secret Manager)
 - `grader-ingest-key`: Pre-shared secret key for automated ingestion endpoints.
@@ -224,7 +224,7 @@ docker stop test-api
 ## Deployment & Rollback Strategy
 
 ### Cloud Run & Firebase Deployment
-Automated end-to-end deployment is orchestrated by [`infra/deploy.sh`](file:///d:/agentic_ai_project/classall-platform/infra/deploy.sh):
+Automated end-to-end deployment is orchestrated by [`infra/deploy.sh`](infra/deploy.sh):
 ```bash
 bash infra/deploy.sh
 ```
@@ -278,7 +278,7 @@ Step 5: Safe Gmail Reply ◄── Step 4: Discrepancy Verification ◄───
 
 ## Evaluation Benchmark & Scoring
 
-For evaluating the platform against the SDOC Hackathon reference dataset and scoring server, please refer to the dedicated [Evaluation Guide](file:///d:/agentic_ai_project/classall-platform/docs/EVALUATION_GUIDE.md).
+For evaluating the platform against the SDOC Hackathon reference dataset and scoring server, please refer to the dedicated [Evaluation Guide](docs/EVALUATION_GUIDE.md).
 
 > [!NOTE]
-> The evaluation runner ([`scripts/eval_inbox.py`](file:///d:/agentic_ai_project/classall-platform/scripts/eval_inbox.py)) relies solely on the isolated [`backend/evaluation_adapter`](file:///d:/agentic_ai_project/classall-platform/backend/evaluation_adapter) package and does not interact with or deploy to the production Cloud Run architecture.
+> The evaluation runner ([`scripts/eval_inbox.py`](scripts/eval_inbox.py)) relies solely on the isolated [`backend/evaluation_adapter`](backend/evaluation_adapter) package and does not interact with or deploy to the production Cloud Run architecture.

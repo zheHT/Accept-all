@@ -112,7 +112,7 @@ class KnowledgePublisher:
 
     def generate_narrative(self, aggregated: dict[str, Any]) -> str:
         prompt = (
-            "You are the ClassAll shipping operations expert. Generate a concise 3-4 sentence "
+            "You are the ShipVerify shipping operations expert. Generate a concise 3-4 sentence "
             "executive summary for the weekly knowledge base report based on operational stats. "
             "Highlight key categories, validation discrepancy trends, and notable recurring "
             "assumptions. Do not invent facts or mention hidden reasoning.\n\n"
@@ -133,7 +133,7 @@ class KnowledgePublisher:
         assump_count = len(aggregated["assumptions"])
 
         return (
-            f"During {aggregated['iso_week']}, ClassAll processed {total} shipping operation "
+            f"During {aggregated['iso_week']}, ShipVerify processed {total} shipping operation "
             f"cases. Deterministic verification yielded {ok} matching cases, {mismatch} detected "
             f"discrepancies, and {review} cases requiring human review. A total of {assump_count} "
             "operational assumptions were documented and tracked for human confirmation."

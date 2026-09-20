@@ -94,7 +94,7 @@ def _invalidate_cached_cases(runtime: Runtime) -> None:
 def create_app(runtime: Runtime | None = None) -> FastAPI:
     settings = runtime.settings if runtime else get_settings()
     runtime = runtime or build_runtime(settings)
-    app = FastAPI(title="ClassAll API", version="0.1.0")
+    app = FastAPI(title="ShipVerify API", version="0.1.0")
     origins = [
         settings.dashboard_base_url.rstrip("/"),
         "https://classall-review-0866395749.web.app",

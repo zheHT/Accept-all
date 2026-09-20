@@ -49,7 +49,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         lease_seconds=runtime.settings.processing_lease_seconds,
         notifier=runtime.notifier,
     )
-    app = FastAPI(title="ClassAll Worker", version="0.1.0")
+    app = FastAPI(title="ShipVerify Worker", version="0.1.0")
     app.state.runtime = runtime
 
     @app.get("/healthz")

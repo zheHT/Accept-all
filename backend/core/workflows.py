@@ -36,7 +36,7 @@ def draft_correction_text(case: dict[str, Any]) -> tuple[str, str]:
         "We reviewed the submitted shipping documents and need clarification or corrected "
         f"documents for: {detail}.\n\n"
         "Please verify the information and reply with the corrected SI/BL documents.\n\n"
-        "Regards,\nClassAll Document Review"
+        "Regards,\nShipVerify Document Review"
     )
     return subject, body
 
@@ -108,7 +108,7 @@ def create_case_draft(
                 has_live_gmail = True
         except Exception as exc:
             logger.warning(
-                "Gmail API draft creation failed, falling back to ClassAll compose URL: %s",
+                "Gmail API draft creation failed, falling back to ShipVerify compose URL: %s",
                 exc,
             )
 
@@ -246,7 +246,7 @@ def create_category_response_draft(
                 draft_url = build_saved_draft_url(draft_id, getattr(gmail, "address", "me"))
                 has_live_gmail = True
         except Exception as exc:
-            logger.warning("Gmail API draft creation failed, falling back to ClassAll compose URL: %s", exc)
+            logger.warning("Gmail API draft creation failed, falling back to ShipVerify compose URL: %s", exc)
 
     delivery_mode = "live" if has_live_gmail else "compose"
     if not draft_id:
