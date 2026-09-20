@@ -3,16 +3,15 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, ChevronRight, SearchX } from "lucide-react";
+import { ArrowRight, ChevronRight, RefreshCw, SearchX } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { StatusChip } from "@/components/status-chip";
 import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
-import { getDashboard } from "@/lib/api";
+import { useWorkspaceCounts } from "@/components/workspace/workspace-counts";
 import { attentionRow } from "@/lib/live-view-models";
 import { type CaseRow } from "@/lib/dashboard-data";
 import type { VerificationStatus } from "@/lib/status";
 import { readParam, writeParam } from "@/lib/url-state";
-import { useLiveQuery } from "@/lib/use-live-query";
 
 type CaseFilter = "all" | Extract<VerificationStatus, "mismatch" | "needs_review" | "failed">;
 
@@ -34,7 +33,7 @@ const FINDING_TONE: Record<CaseRow["status"], string> = {
 export function AttentionTable() {
   const router = useRouter();
   const [filter, setFilter] = useState<CaseFilter>("all");
-  const query = useLiveQuery((signal) => getDashboard("week", signal), []);
+  const { dashboard: query } = useWorkspaceCounts();
   const attentionCases = useMemo(
     () => (query.data?.attention_items || []).map(attentionRow),
     [query.data],
@@ -44,10 +43,10 @@ export function AttentionTable() {
   const openCase = (row: CaseRow) =>
     router.push(row.status === "needs_review" ? `/review?case=${row.id}` : `/cases?case=${row.id}`);
 
-  /** `?cases=mismatch` opens the dashboard with that filter already applied. */
+  /** `?cases=mismatch|needs_review|failed` pre-filters the view on arrival. */
   useEffect(() => {
     const requested = readParam("cases");
-    if (requested && FILTERS.some(({ id }) => id === requested)) {
+    if (requested && FILTERS.some((f) => f.id === requested)) {
       setFilter(requested as CaseFilter);
     }
   }, []);
@@ -90,7 +89,19 @@ export function AttentionTable() {
             Ranked by discrepancy severity, then by documentation cut-off.
           </p>
         </div>
-        <div className="flex shrink-0 gap-1 self-start rounded-xl border border-edge bg-surface/55 p-1 backdrop-blur lg:self-auto">
+        <div className="flex items-center gap-2 self-start lg:self-auto">
+          <button
+            type="button"
+            onClick={() => void query.refresh()}
+            disabled={query.loading}
+            aria-label="Refresh attention cases"
+            title="Refresh attention cases"
+            className="btn-glass px-2.5 py-1.5 text-[12px] active:scale-95"
+          >
+            <RefreshCw className={cn("size-3.5", query.loading && "animate-spin")} />
+            Refresh
+          </button>
+          <div className="flex shrink-0 gap-1 rounded-xl border border-edge bg-surface/55 p-1 backdrop-blur">
           {FILTERS.map(({ id, label }) => (
             <button
               key={id}
@@ -115,6 +126,7 @@ export function AttentionTable() {
               </span>
             </button>
           ))}
+          </div>
         </div>
       </header>
 

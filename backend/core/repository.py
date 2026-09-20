@@ -487,16 +487,31 @@ class FirestoreRepository:
         return self.get_platform_settings()
 
     def is_reviewer(self, uid: str) -> bool:
-        snap = self.client.collection("reviewers").document(uid).get()
+        if not uid:
+            return False
+        ident = uid.strip()
+        ident_lower = ident.lower()
+        snap = self.client.collection("reviewers").document(ident).get()
         if snap.exists and bool(snap.to_dict().get("enabled", True)):
             return True
-        reviewers = list(self.client.collection("reviewers").limit(10).stream())
+        if ident != ident_lower:
+            snap = self.client.collection("reviewers").document(ident_lower).get()
+            if snap.exists and bool(snap.to_dict().get("enabled", True)):
+                return True
+        reviewers = list(self.client.collection("reviewers").limit(20).stream())
         if not reviewers:
-            self.client.collection("reviewers").document(uid).set({"enabled": True, "created_at": firestore.SERVER_TIMESTAMP})
+            self.client.collection("reviewers").document(ident).set(
+                {"enabled": True, "created_at": firestore.SERVER_TIMESTAMP}
+            )
             return True
         for doc in reviewers:
             data = doc.to_dict()
-            if data.get("email") and data.get("email").lower() == uid.lower() and data.get("enabled", True):
+            doc_email = str(data.get("email") or "").lower()
+            doc_uid = str(data.get("uid") or "")
+            if (
+                (doc_email and doc_email == ident_lower)
+                or (doc_uid and doc_uid == ident)
+            ) and data.get("enabled", True):
                 return True
         return False
 

@@ -102,7 +102,9 @@ def build_comparisons(documents: list[dict[str, Any]], case: dict[str, Any]) -> 
             "matches": field not in defects and (
                 "gross_weight_kg" not in defects or field != "gross_weight"
             ),
-            "low_confidence": field in low_confidence,
+            "low_confidence": field in low_confidence or (
+                field == "gross_weight" and "gross_weight_kg" in low_confidence
+            ),
         }
         for field, label in VERIFIED_FIELDS
     ]
@@ -110,6 +112,14 @@ def build_comparisons(documents: list[dict[str, Any]], case: dict[str, Any]) -> 
 
 def build_case_summary(case: dict[str, Any]) -> dict[str, Any]:
     result = case.get("result") or {}
+    required = case.get("required_review_fields")
+    if required is None:
+        flagged = set(result.get("defect_fields") or []) | set(case.get("low_confidence_fields") or [])
+        if "gross_weight_kg" in flagged:
+            flagged.add("gross_weight")
+        required = [field for field, _ in VERIFIED_FIELDS if field in flagged]
+    field_reviews = case.get("field_reviews") or {}
+    unresolved = [field for field in required if not field_reviews.get(field, {}).get("resolved")]
     return {
         "case_id": case.get("case_id"),
         "source_type": case.get("source_type"),
@@ -129,19 +139,25 @@ def build_case_summary(case: dict[str, Any]) -> dict[str, Any]:
         "low_confidence_fields": case.get("low_confidence_fields", []),
         "version": case.get("version", 0),
         "draft_state": case.get("draft_state"),
+        "unresolved_fields": unresolved,
+        "review_progress": {"total": len(required), "completed": len(required) - len(unresolved)},
     }
 
 
 def build_case_detail(case: dict[str, Any], documents: list[dict[str, Any]]) -> dict[str, Any]:
+    comparisons = build_comparisons(documents, case)
+    required = required_review_fields(case, comparisons)
     return {
-        **build_case_summary(case),
+        **build_case_summary({**case, "required_review_fields": required}),
         "body": case.get("body", ""),
         "recipients": case.get("recipients", []),
         "rationale": case.get("rationale", ""),
         "assumptions": case.get("assumptions", []),
         "result": case.get("result"),
         "documents": [_public_document(document) for document in documents],
-        "comparisons": build_comparisons(documents, case),
+        "comparisons": comparisons,
+        "field_reviews": case.get("field_reviews") or {},
+        "review_history": case.get("review_history") or [],
         "draft": (
             {
                 "state": case.get("draft_state"),
@@ -154,6 +170,23 @@ def build_case_detail(case: dict[str, Any], documents: list[dict[str, Any]]) -> 
             else None
         ),
     }
+
+
+def required_review_fields(case: dict[str, Any], comparisons: list[dict[str, Any]]) -> list[str]:
+    """Keep the original issues visible even after a reviewer supplies a value."""
+    required = set(case.get("required_review_fields") or [])
+    for comparison in comparisons:
+        if (
+            not comparison["matches"]
+            or comparison["low_confidence"]
+            or any(comparison[role]["value"] in (None, "") for role in ("si", "bl"))
+        ):
+            required.add(comparison["field"])
+    # Some cases are routed for document-level uncertainty with no flagged field.
+    if not required and (case.get("result") or {}).get("status") == "NEEDS_REVIEW":
+        required.update(field for field, _ in VERIFIED_FIELDS)
+    required.update(case.get("field_reviews") or {})
+    return [field for field, _ in VERIFIED_FIELDS if field in required]
 
 
 def dashboard_view(cases: list[dict[str, Any]], period: str) -> dict[str, Any]:

@@ -5,16 +5,22 @@ import html
 import re
 import secrets
 import time
+from contextlib import suppress
+from io import BytesIO
 from typing import Annotated, Any
+from urllib.parse import quote
 
 import google.auth.transport.requests
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from google.api_core.exceptions import Conflict
+from fastapi.responses import HTMLResponse, Response
+from google.api_core.exceptions import Conflict, GoogleAPIError, NotFound
 from google.cloud import secretmanager
 from google.oauth2 import id_token
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
+from backend.api.field_review import field_review_changes
 from backend.api.markdown_preview import render_preview_document
 from backend.api.views import (
     build_case_detail,
@@ -29,6 +35,7 @@ from backend.core.schemas import (
     DraftSendRequest,
     DraftUpdateRequest,
     ExplainRequest,
+    FieldReviewRequest,
     IngestionState,
     IngestMetadata,
     PlatformSettingsUpdate,
@@ -52,14 +59,23 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         "https://gen-lang-client-0866395749.web.app",
         "https://gen-lang-client-0866395749.firebaseapp.com",
         "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
         "http://localhost:3000",
+        "http://localhost:8080",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
+        "http://127.0.0.1:3000",
     ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(dict.fromkeys(o for o in origins if o)),
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://.*\.web\.app$|^https://.*\.firebaseapp\.com$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Document-Page-Count"],
     )
     app.state.runtime = runtime
 
@@ -88,11 +104,12 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         uid = str(claims.get("user_id") or claims.get("sub") or claims.get("uid") or "")
         email = str(claims.get("email") or "")
         claims["uid"] = uid
-        if not (
+        is_authorized = (
             (uid and runtime.repository.is_reviewer(uid))
             or (email and runtime.repository.is_reviewer(email))
-        ):
-            raise HTTPException(403, "reviewer access required")
+        )
+        if not is_authorized:
+            raise HTTPException(403, f"reviewer access required for {email or uid}")
         return claims
 
     def get_case_or_404(case_id: str) -> dict[str, Any]:
@@ -126,6 +143,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                 for upload in (attachments or [])
             ]
             case, created = runtime.ingestor.ingest(parsed.model_dump(), files)
+            if created:
+                invalidate_cached_cases()
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return {
@@ -144,6 +163,23 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         run["submission"] = run.get("results", {})
         return run
 
+    _cached_cases: list[dict[str, Any]] | None = None
+    _cached_cases_time: float = 0.0
+    _cache_ttl: float = 10.0
+
+    def get_cached_cases() -> list[dict[str, Any]]:
+        nonlocal _cached_cases, _cached_cases_time
+        now = time.time()
+        if _cached_cases is None or (now - _cached_cases_time) > _cache_ttl:
+            _cached_cases = runtime.repository.list_cases(limit=5000)
+            _cached_cases_time = now
+        return _cached_cases
+
+    def invalidate_cached_cases() -> None:
+        nonlocal _cached_cases, _cached_cases_time
+        _cached_cases = None
+        _cached_cases_time = 0.0
+
     def paged_cases(
         cases: list[dict[str, Any]], limit: int, cursor: str | None
     ) -> dict[str, Any]:
@@ -158,7 +194,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
     @app.get("/api/dashboard", dependencies=[Depends(require_reviewer)])
     def dashboard(period: str = Query(default="week", pattern="^(day|week|month)$")) -> dict[str, Any]:
-        return dashboard_view(runtime.repository.list_cases(limit=5000), period)
+        return dashboard_view(get_cached_cases(), period)
 
     @app.get("/api/inbox", dependencies=[Depends(require_reviewer)])
     def inbox(
@@ -166,7 +202,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         cases = [
             case
-            for case in runtime.repository.list_cases(limit=5000)
+            for case in get_cached_cases()
             if case.get("source_type") == "gmail"
         ]
         return paged_cases(cases, limit, cursor)
@@ -177,7 +213,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         cases = [
             case
-            for case in runtime.repository.list_cases(limit=5000)
+            for case in get_cached_cases()
             if (case.get("result") or {}).get("status") in {"MISMATCH", "NEEDS_REVIEW"}
             and not case.get("review_decision")
         ]
@@ -189,7 +225,14 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         limit: int = Query(default=50, ge=1, le=200),
         cursor: str | None = None,
     ) -> dict[str, Any]:
-        cases = runtime.repository.list_cases(limit=5000, status=status)
+        if status:
+            cases = [
+                case
+                for case in get_cached_cases()
+                if (case.get("result") or {}).get("status") == status
+            ]
+        else:
+            cases = get_cached_cases()
         return paged_cases(cases, limit, cursor)
 
     @app.get("/api/cases/{case_id}", dependencies=[Depends(require_reviewer)])
@@ -207,6 +250,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                     "processing_state": ProcessingState.QUEUED.value,
                     "processing_error": None,
                     "review_decision": None,
+                    "field_reviews": {},
+                    "required_review_fields": [],
                 },
                 expected_version=expected_version,
             )
@@ -214,6 +259,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             raise HTTPException(409, "case changed; refresh before retrying") from exc
         message_id = runtime.publisher.publish({"case_id": case_id})
         runtime.repository.append_event(case_id, "retry_queued", {"message_id": message_id})
+        invalidate_cached_cases()
         return build_case_summary(updated)
 
     @app.get(
@@ -233,14 +279,88 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             raise HTTPException(404, "document not found")
         return {"url": runtime.blobs.signed_url(document["gcs_uri"])}
 
+    @app.get(
+        "/api/cases/{case_id}/documents/{document_id}/content",
+        dependencies=[Depends(require_reviewer)],
+    )
+    def document_content(case_id: str, document_id: str) -> Response:
+        get_case_or_404(case_id)
+        document = next(
+            (item for item in runtime.repository.list_documents(case_id)
+             if item["document_id"] == document_id),
+            None,
+        )
+        if document is None:
+            raise HTTPException(404, "document not found")
+        try:
+            data = runtime.blobs.download(document["gcs_uri"])
+        except (FileNotFoundError, NotFound, KeyError, ValueError) as exc:
+            raise HTTPException(404, "original document is unavailable") from exc
+        except GoogleAPIError as exc:
+            raise HTTPException(503, "document storage is temporarily unavailable") from exc
+        # Only PDFs may render inline. Other attachment formats are downloads,
+        # so uploaded HTML cannot execute on the API's origin.
+        is_pdf = data.lstrip().startswith(b"%PDF-")
+        filename = quote(str(document.get("filename") or "document"), safe="")
+        headers = {
+            "Content-Disposition": f"{'inline' if is_pdf else 'attachment'}; filename*=UTF-8''{filename}",
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if is_pdf:
+            # Encrypted or damaged PDFs may still be downloaded, but must
+            # not advertise an invented page count to the reviewer.
+            with suppress(PdfReadError, ValueError, KeyError):
+                headers["X-Document-Page-Count"] = str(len(PdfReader(BytesIO(data)).pages))
+        return Response(
+            content=data,
+            media_type="application/pdf" if is_pdf else "application/octet-stream",
+            headers=headers,
+        )
+
+    @app.put("/api/cases/{case_id}/fields/{field}/review")
+    def review_field(
+        case_id: str,
+        field: str,
+        request: FieldReviewRequest,
+        reviewer: dict[str, Any] = Depends(require_reviewer),  # noqa: B008
+    ) -> dict[str, Any]:
+        case = get_case_or_404(case_id)
+        if case.get("processing_state") in {"DRAFT", "QUEUED", "PROCESSING"}:
+            raise HTTPException(409, "wait for document processing to finish before reviewing")
+        if case.get("review_decision"):
+            raise HTTPException(409, "case is already resolved; reopen it before changing field decisions")
+        if case.get("version") != request.expected_version:
+            raise HTTPException(409, "case changed; refresh before reviewing")
+        documents = runtime.repository.list_documents(case_id)
+        try:
+            changes = field_review_changes(case, documents, field, request, reviewer)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        try:
+            # Evidence and history are saved together under the version check.
+            updated = runtime.repository.update_case(
+                case_id, changes, expected_version=request.expected_version,
+            )
+        except Conflict as exc:
+            raise HTTPException(409, "case changed; refresh before reviewing") from exc
+        invalidate_cached_cases()
+        return build_case_detail(updated, documents)
+
     @app.post("/api/cases/{case_id}/review", dependencies=[Depends(require_reviewer)])
     def review(case_id: str, request: ReviewRequest) -> dict[str, Any]:
         case = get_case_or_404(case_id)
+        if request.decision == ReviewDecision.APPROVE and case.get("field_reviews"):
+            detail = build_case_detail(case, runtime.repository.list_documents(case_id))
+            if detail["unresolved_fields"]:
+                raise HTTPException(409, "resolve all outstanding fields before approving this case")
         if request.decision == ReviewDecision.DECLINE and case.get("source_type") == "gmail":
             if case.get("version") != request.expected_version:
                 raise HTTPException(409, "case changed; refresh before reviewing")
             try:
-                return create_case_draft(runtime.repository, runtime.gmail, runtime.telegram, case)
+                draft_res = create_case_draft(runtime.repository, runtime.gmail, runtime.telegram, case)
+                invalidate_cached_cases()
+                return draft_res
             except ValueError as exc:
                 raise HTTPException(409, str(exc)) from exc
         try:
@@ -256,6 +376,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             "reviewed",
             {"decision": request.decision.value, "note": request.note},
         )
+        invalidate_cached_cases()
         return updated
 
     @app.post("/api/cases/{case_id}/explain", dependencies=[Depends(require_reviewer)])
@@ -280,7 +401,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                 body=request.body,
                 thread_id=case.get("gmail_thread_id", ""),
             )
-            return runtime.repository.update_case(
+            updated = runtime.repository.update_case(
                 case_id,
                 {
                     "draft_subject": request.subject,
@@ -289,6 +410,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                 },
                 expected_version=request.expected_version,
             )
+            invalidate_cached_cases()
+            return updated
         except Conflict as exc:
             raise HTTPException(409, "draft changed; refresh before editing") from exc
 
@@ -308,6 +431,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             expected_version=request.expected_version,
         )
         runtime.repository.append_event(case_id, "gmail_draft_sent", {"message_id": sent.get("id")})
+        invalidate_cached_cases()
         return updated
 
     def settings_view() -> dict[str, Any]:

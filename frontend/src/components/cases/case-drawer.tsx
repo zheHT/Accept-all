@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   CheckCircle2,
+  ScanSearch,
   ExternalLink,
   FileText,
   Mail,
@@ -15,9 +16,12 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { StatusChip } from "@/components/status-chip";
+import { DocumentComparison } from "@/components/ui/document-comparison";
+import { getCase } from "@/lib/api";
+import { reviewDetail } from "@/lib/live-view-models";
+import type { ReviewCase } from "@/lib/review-data";
 import { DocumentPreview, type PreviewDocument } from "@/components/ui/document-preview";
 import { useToast } from "@/components/ui/toast";
-import { caseDocumentBody } from "@/lib/document-text";
 import { REQUIRED_FIELDS, type FieldResult, type VerificationCase } from "@/lib/case-data";
 
 const RESULT_STYLE: Record<FieldResult, { label: string; chip: string; row: string }> = {
@@ -67,6 +71,20 @@ export function CaseDrawer({
   const router = useRouter();
   const toast = useToast();
   const [preview, setPreview] = useState<PreviewDocument | null>(null);
+  const [comparisonCase, setComparisonCase] = useState<ReviewCase | null>(null);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+
+  const openComparison = async () => {
+    setComparisonLoading(true);
+    try {
+      const detail = await getCase(item.id);
+      setComparisonCase(reviewDetail(detail));
+    } catch (error) {
+      toast({ title: "Document comparison is unavailable", description: error instanceof Error ? error.message : "Please retry.", tone: "warning" });
+    } finally {
+      setComparisonLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!verificationCase) return;
@@ -163,17 +181,7 @@ export function CaseDrawer({
                     <button
                       key={role}
                       type="button"
-                      onClick={() => {
-                        const body = caseDocumentBody(item, role);
-                        setPreview({
-                          name: file.name,
-                          role,
-                          pages: file.pages,
-                          scanned: role === "BL" ? item.documents.bl?.scanned : false,
-                          lines: body.lines,
-                          problemLines: body.problemLines,
-                        });
-                      }}
+                      onClick={() => void openComparison()}
                       className="flex items-center gap-2.5 rounded-lg border border-line bg-surface/80 px-2.5 py-2 text-left transition-colors hover:border-brand-200 hover:bg-surface"
                     >
                       <span className="rounded bg-gradient-to-b from-brand-500 to-brand-700 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-white">
@@ -188,6 +196,10 @@ export function CaseDrawer({
                 })}
               </div>
             </div>
+            <button type="button" onClick={() => void openComparison()} disabled={comparisonLoading} className="btn-glass mt-3 w-full justify-center text-[12px]">
+              <ScanSearch className="size-3.5" strokeWidth={2.25} />
+              {comparisonLoading ? "Loading documents…" : "Compare source documents (SI vs BL)"}
+            </button>
           </section>
 
           <section className="mt-6">
@@ -367,6 +379,16 @@ export function CaseDrawer({
       </section>
 
       <DocumentPreview document={preview} onClose={() => setPreview(null)} />
+      {comparisonCase && (
+        <DocumentComparison
+          si={comparisonCase.si}
+          bl={comparisonCase.bl}
+          problemField={comparisonCase.problemField}
+          open
+          onClose={() => setComparisonCase(null)}
+          heading={`Document comparison · ${item.caseId}`}
+        />
+      )}
     </div>
   );
 }

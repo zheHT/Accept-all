@@ -1,8 +1,8 @@
 "use client";
 
 import { createContext, useContext, useMemo } from "react";
-import { getDashboard } from "@/lib/api";
-import { useLiveQuery } from "@/lib/use-live-query";
+import { getDashboard, type DashboardResponse } from "@/lib/api";
+import { useLiveQuery, type LiveQuery } from "@/lib/use-live-query";
 
 interface WorkspaceCountsValue {
   unreadEmails: number;
@@ -13,7 +13,16 @@ interface WorkspaceCountsValue {
   markReviewOpened: (id: string) => void;
   isEmailRead: (id: string) => boolean;
   isReviewOpened: (id: string) => boolean;
+  dashboard: LiveQuery<DashboardResponse>;
 }
+
+const defaultLiveQuery: LiveQuery<DashboardResponse> = {
+  data: null,
+  loading: true,
+  stale: false,
+  error: null,
+  refresh: async () => {},
+};
 
 const WorkspaceCountsContext = createContext<WorkspaceCountsValue>({
   unreadEmails: 0,
@@ -22,6 +31,7 @@ const WorkspaceCountsContext = createContext<WorkspaceCountsValue>({
   markReviewOpened: () => {},
   isEmailRead: () => true,
   isReviewOpened: () => false,
+  dashboard: defaultLiveQuery,
 });
 
 export function useWorkspaceCounts() {
@@ -44,8 +54,9 @@ export function WorkspaceCountsProvider({ children }: { children: React.ReactNod
       markReviewOpened: () => {},
       isEmailRead: () => true,
       isReviewOpened: () => false,
+      dashboard,
     }),
-    [dashboard.data],
+    [dashboard],
   );
 
   return (

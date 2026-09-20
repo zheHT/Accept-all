@@ -18,9 +18,13 @@ import type {
   MailAttachment,
 } from "@/lib/inbox-data";
 import type {
+  DiscrepancyType,
+  FieldDiscrepancyItem,
   ReviewCase,
   ReviewReasonCode,
+  StructuredFieldReview,
 } from "@/lib/review-data";
+
 import type { CaseRow, Period, PeriodData } from "@/lib/dashboard-data";
 import type { VerificationStatus } from "@/lib/status";
 import { buildDocumentLines } from "@/lib/document-text";
@@ -203,9 +207,16 @@ function comparisonResult(comparison: ApiFieldComparison): FieldResult {
   return comparison.matches ? "match" : "mismatch";
 }
 
-function valueText(value: ApiFieldComparison["si"]): string | null {
-  if (value.value === null || value.value === undefined) return null;
-  return `${value.value}${value.unit ? ` ${value.unit}` : ""}`;
+function valueText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (typeof value === "object") {
+    const obj = value as { value?: unknown; unit?: unknown };
+    if (obj.value !== null && obj.value !== undefined) {
+      return `${obj.value}${obj.unit ? ` ${obj.unit}` : ""}`;
+    }
+  }
+  return null;
 }
 
 function emptyFields(status: VerificationStatus): VerificationCase["fields"] {
@@ -293,8 +304,8 @@ export function caseDetail(item: CaseDetail): VerificationCase {
   return {
     ...base,
     documents: {
-      si: docs.si ? { name: docs.si.filename, pages: 1 } : null,
-      bl: docs.bl ? { name: docs.bl.filename, pages: 1, scanned: docs.bl.readable === false } : null,
+      si: docs.si ? { name: docs.si.filename, pages: 1, documentId: docs.si.document_id, caseId: item.case_id, contentType: docs.si.content_type, rawText: docs.si.raw_text } : null,
+      bl: docs.bl ? { name: docs.bl.filename, pages: 1, scanned: docs.bl.readable === false, documentId: docs.bl.document_id, caseId: item.case_id, contentType: docs.bl.content_type, rawText: docs.bl.raw_text } : null,
     },
     fields,
     fieldsChecked: fields.filter((field) => field.result !== "pending").length,
@@ -350,20 +361,115 @@ export function reviewSummary(item: CaseSummary): ReviewCase {
       extractedLabel: label,
       extractedValue: null,
     },
+    unresolvedFields: item.unresolved_fields || [...new Set([...item.low_confidence_fields, ...item.defect_fields])],
   };
 }
 
+export const VERIFIED_SEVEN_FIELDS: readonly { field: string; label: string }[] = [
+  { field: "shipper", label: "Shipper" },
+  { field: "consignee", label: "Consignee" },
+  { field: "notify_party", label: "Notify Party" },
+  { field: "port_of_loading", label: "Port of Loading" },
+  { field: "port_of_discharge", label: "Port of Discharge" },
+  { field: "container_count", label: "Container Count" },
+  { field: "gross_weight", label: "Gross Weight (kg)" },
+];
+
 export function reviewDetail(item: CaseDetail): ReviewCase {
   const base = reviewSummary(item);
-  const problemKey = item.low_confidence_fields[0] || item.defect_fields[0] || item.comparisons.find((comparison) => !comparison.matches || comparison.low_confidence)?.field;
-  const comparison = item.comparisons.find((entry) => entry.field === problemKey) || item.comparisons[0];
+  const reviewValues = item.field_reviews || {};
   const siDocument = item.documents.find((document) => document.document_type === "SI");
   const blDocument = item.documents.find((document) => document.document_type === "BL");
-  if (!comparison) return base;
 
-  const problemField = comparison.label || fieldLabel(comparison.field);
-  const siVal = valueText(comparison.si);
-  const blVal = valueText(comparison.bl);
+  // Build structured comparison item for every one of the 7 required fields
+  const comparisonFields: FieldDiscrepancyItem[] = VERIFIED_SEVEN_FIELDS.map(({ field, label }) => {
+    const entry = item.comparisons.find(
+      (c) => c.field === field || (field === "gross_weight" && c.field === "gross_weight_kg"),
+    );
+    const human = reviewValues[field] || (field === "gross_weight" ? reviewValues["gross_weight_kg"] : undefined);
+    const effective = human?.effective_values;
+
+    const siVal = effective?.si !== undefined
+      ? valueText({ value: effective.si, confidence: null })
+      : entry ? valueText(entry.si) : null;
+    const blVal = effective?.bl !== undefined
+      ? valueText({ value: effective.bl, confidence: null })
+      : entry ? valueText(entry.bl) : null;
+
+    let discrepancyType: DiscrepancyType = "match";
+    if (!entry || entry.si?.value == null || entry.bl?.value == null) {
+      discrepancyType = "missing";
+    } else if (!entry.matches) {
+      discrepancyType = "mismatch";
+    } else if (entry.low_confidence) {
+      discrepancyType = "uncertain";
+    }
+
+    const structuredReview: StructuredFieldReview | null = human ? {
+      field,
+      label,
+      decision: human.decision,
+      value: human.value,
+      documentRole: human.document_role,
+      note: human.note,
+      reviewer: human.reviewer,
+      reviewerId: human.reviewer_id,
+      at: human.at,
+      originalSi: entry ? valueText(human.original_si ?? entry.si) : null,
+      originalBl: entry ? valueText(human.original_bl ?? entry.bl) : null,
+      resolved: human.resolved,
+    } : null;
+
+    const isResolved = human
+      ? (human.resolved ?? (human.decision !== "unreadable"))
+      : (discrepancyType === "match");
+
+    return {
+      field,
+      label,
+      si: siVal,
+      bl: blVal,
+      matches: entry?.matches ?? false,
+      lowConfidence: entry?.low_confidence ?? false,
+      discrepancyType,
+      resolved: isResolved,
+      humanReview: structuredReview,
+    };
+  });
+
+  const structuredFieldReviews: Record<string, StructuredFieldReview> = {};
+  for (const cf of comparisonFields) {
+    if (cf.humanReview) {
+      structuredFieldReviews[cf.field] = cf.humanReview;
+    }
+  }
+
+  const structuredHistory: StructuredFieldReview[] = (item.review_history || []).map((h) => ({
+    field: h.field,
+    label: fieldLabel(h.field),
+    decision: h.decision,
+    value: h.value,
+    documentRole: h.document_role,
+    note: h.note,
+    reviewer: h.reviewer,
+    reviewerId: h.reviewer_id,
+    at: h.at,
+    originalSi: h.original_si ? valueText(h.original_si) : null,
+    originalBl: h.original_bl ? valueText(h.original_bl) : null,
+    resolved: h.resolved,
+  }));
+
+  const unresolved = comparisonFields
+    .filter((cf) => cf.discrepancyType !== "match" && !cf.resolved)
+    .map((cf) => cf.field);
+
+  // Default to first unresolved field, or first discrepancy, or first field
+  const problemKey = unresolved[0] ||
+    comparisonFields.find((cf) => cf.discrepancyType !== "match")?.field ||
+    comparisonFields[0].field;
+
+  const activeField = comparisonFields.find((cf) => cf.field === problemKey) || comparisonFields[0];
+  const problemField = activeField.label;
 
   const siBuild = buildDocumentLines("SI", siDocument, item.comparisons, problemField);
   const blBuild = buildDocumentLines("BL", blDocument, item.comparisons, problemField);
@@ -372,30 +478,40 @@ export function reviewDetail(item: CaseDetail): ReviewCase {
     ...base,
     problemField,
     reasonDetail: item.rationale || base.reasonDetail,
-    confidence: Math.min(comparison.si.confidence ?? 1, comparison.bl.confidence ?? 1),
+    confidence: confidence(item),
     si: {
       name: siDocument?.filename || "Shipping Instruction",
+      documentId: siDocument?.document_id,
+      caseId: item.case_id,
+      contentType: siDocument?.content_type,
       pages: 1,
       snippet: siBuild.lines,
       fullLines: siBuild.lines,
       problemLines: siBuild.problemLines,
       highlightIndex: siBuild.problemLines[0] ?? 0,
-      extractedLabel: comparison.label,
-      extractedValue: siVal,
+      extractedLabel: activeField.label,
+      extractedValue: activeField.si,
       rawText: siDocument?.raw_text ?? null,
     },
     bl: {
       name: blDocument?.filename || "Bill of Lading",
+      documentId: blDocument?.document_id,
+      caseId: item.case_id,
+      contentType: blDocument?.content_type,
       pages: 1,
       scanned: blDocument?.readable === false,
       snippet: blBuild.lines,
       fullLines: blBuild.lines,
       problemLines: blBuild.problemLines,
       highlightIndex: blBuild.problemLines[0] ?? 0,
-      extractedLabel: comparison.label,
-      extractedValue: blVal,
+      extractedLabel: activeField.label,
+      extractedValue: activeField.bl,
       rawText: blDocument?.raw_text ?? null,
     },
+    comparisonFields,
+    fieldReviews: structuredFieldReviews,
+    reviewHistory: structuredHistory,
+    unresolvedFields: unresolved,
   };
 }
 

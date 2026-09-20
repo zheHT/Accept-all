@@ -29,7 +29,21 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}, retry = 
     }
   }
   if (response.status === 401) authorizationFailed();
-  if (!response.ok) throw new ApiError((await response.text()) || response.statusText, response.status);
+  if (!response.ok) {
+    let message = response.statusText;
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        message = json.detail || json.message || text || response.statusText;
+      } catch {
+        message = text || response.statusText;
+      }
+    } catch {
+      // keep statusText fallback
+    }
+    throw new ApiError(message, response.status);
+  }
   if (response.status === 204) return undefined as T;
   const contentType = response.headers.get("content-type") || "";
   return (contentType.includes("application/json") ? await response.json() : await response.text()) as T;
@@ -55,6 +69,8 @@ export interface CaseSummary {
   low_confidence_fields: string[];
   version: number;
   draft_state?: string | null;
+  unresolved_fields?: string[];
+  review_progress?: { total: number; completed: number };
 }
 export interface PublicDocument {
   document_id: string;
@@ -87,7 +103,23 @@ export interface CaseDetail extends CaseSummary {
   assumptions: unknown[];
   documents: PublicDocument[];
   comparisons: FieldComparison[];
+  field_reviews?: Record<string, FieldReview>;
+  review_history?: FieldReview[];
   draft: { state: string; subject: string; body: string; content_hash: string } | null;
+}
+export interface FieldReview {
+  field: string;
+  decision: "confirm" | "correct" | "unreadable";
+  value: string | null;
+  document_role: "SI" | "BL";
+  note: string;
+  reviewer: string;
+  reviewer_id?: string | null;
+  at: string;
+  original_si?: FieldValue;
+  original_bl?: FieldValue;
+  effective_values?: { si: string | number | null; bl: string | number | null };
+  resolved: boolean;
 }
 export interface PagedResponse<T> { items: T[]; next_cursor: string | null }
 export interface DashboardResponse {
@@ -133,10 +165,62 @@ export interface AssumptionRecord {
 }
 
 export const getDashboard = (period: DashboardResponse["period"], signal?: AbortSignal) => apiFetch<DashboardResponse>(`/api/dashboard?period=${period}`, { signal });
-export const getInbox = (signal?: AbortSignal) => apiFetch<PagedResponse<CaseSummary>>("/api/inbox?limit=200", { signal });
-export const getCases = (signal?: AbortSignal) => apiFetch<PagedResponse<CaseSummary>>("/api/cases?limit=200", { signal });
-export const getReviews = (signal?: AbortSignal) => apiFetch<PagedResponse<CaseSummary>>("/api/reviews?limit=200", { signal });
+export const getInbox = (signal?: AbortSignal, limit = 50) => apiFetch<PagedResponse<CaseSummary>>(`/api/inbox?limit=${limit}`, { signal });
+export const getCases = (signal?: AbortSignal, limit = 50) => apiFetch<PagedResponse<CaseSummary>>(`/api/cases?limit=${limit}`, { signal });
+export const getReviews = (signal?: AbortSignal, limit = 50) => apiFetch<PagedResponse<CaseSummary>>(`/api/reviews?limit=${limit}`, { signal });
 export const getCase = (id: string, signal?: AbortSignal) => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(id)}`, { signal });
+export const getDocumentDownload = (caseId: string, documentId: string) =>
+  apiFetch<{ url: string }>(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}/download`);
+
+/** Fetch the source bytes with the configured auth token (signed file:// URLs are not reliable in-browser). */
+export interface DocumentContent {
+  blob: Blob;
+  pages: number | null;
+}
+
+export async function getDocumentContent(caseId: string, documentId: string, signal?: AbortSignal): Promise<DocumentContent> {
+  const path = `/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}/content`;
+  const request = async (forceRefresh: boolean) => {
+    const token = await tokenProvider(forceRefresh);
+    const headers = new Headers();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    return fetch(`${API_BASE_URL}${path}`, { headers, signal, cache: "no-store" });
+  };
+  let response = await request(false);
+  if (response.status === 401) {
+    response = await request(true);
+  }
+  if (!response.ok) {
+    let message = response.statusText;
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        message = json.detail || json.message || text || response.statusText;
+      } catch {
+        message = text || response.statusText;
+      }
+    } catch {
+      // keep statusText fallback
+    }
+    throw new ApiError(message, response.status);
+  }
+  const pageHeader = Number(response.headers.get("X-Document-Page-Count"));
+  return { blob: await response.blob(), pages: Number.isFinite(pageHeader) && pageHeader > 0 ? pageHeader : null };
+}
+
+export const reviewField = (
+  caseId: string,
+  field: string,
+  expectedVersion: number,
+  decision: FieldReview["decision"],
+  note = "",
+  value?: string,
+  documentRole: FieldReview["document_role"] = "BL",
+) => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/fields/${encodeURIComponent(field)}/review`, {
+  method: "PUT",
+  body: JSON.stringify({ decision, expected_version: expectedVersion, note, ...(value !== undefined ? { value } : {}), document_role: documentRole }),
+});
 export const retryCase = (item: CaseSummary) => apiFetch<CaseSummary>(`/api/cases/${encodeURIComponent(item.case_id)}/retry?expected_version=${item.version}`, { method: "POST" });
 export const reviewCase = (item: CaseSummary, decision: "APPROVE" | "DECLINE", note = "") => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(item.case_id)}/review`, { method: "POST", body: JSON.stringify({ decision, expected_version: item.version, note }) });
 export const updateDraft = (id: string, version: number, subject: string, body: string) => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(id)}/draft`, { method: "PUT", body: JSON.stringify({ subject, body, expected_version: version }) });

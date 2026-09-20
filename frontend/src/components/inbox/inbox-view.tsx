@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, Paperclip, Search, SearchX, X } from "lucide-react";
+import { ChevronDown, Paperclip, RefreshCw, Search, SearchX, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
 import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
@@ -71,6 +71,7 @@ export function InboxView() {
   const [date, setDate] = useState<DateFilter>("all");
   const [sort, setSort] = useState<SortOrder>("newest");
   const [selected, setSelected] = useState<InboxEmail | null>(null);
+  const [displayLimit, setDisplayLimit] = useState(25);
 
   useEffect(() => {
     if (inbox.data) setEmails(inbox.data.items.map(inboxSummary));
@@ -181,6 +182,8 @@ export function InboxView() {
     });
   }, [emails, query, type, status, date, sort]);
 
+  const visibleRows = useMemo(() => rows.slice(0, displayLimit), [rows, displayLimit]);
+
   if (inbox.loading && !inbox.data) return <LoadingState label="Loading inbox" />;
   if (inbox.error && !inbox.data) {
     return <ErrorState message={inbox.error} retry={() => void inbox.refresh()} />;
@@ -243,7 +246,18 @@ export function InboxView() {
           </div>
         </div>
 
-        <div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void sync()}
+            disabled={inbox.loading}
+            aria-label="Refresh inbox"
+            title="Refresh inbox"
+            className="btn-glass active:scale-95"
+          >
+            <RefreshCw className={cn("size-3.5", inbox.loading && "animate-spin")} />
+            Refresh
+          </button>
           <button
             type="button"
             onClick={clearFilters}
@@ -270,7 +284,9 @@ export function InboxView() {
             </p>
           </div>
           <span className="tabular shrink-0 text-[12px] text-ink-400">
-            {rows.length} of {totals.total} emails
+            {visibleRows.length < rows.length
+              ? `Showing ${visibleRows.length} of ${rows.length} emails`
+              : `${rows.length} of ${totals.total} emails`}
           </span>
         </header>
 
@@ -314,7 +330,7 @@ export function InboxView() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((email) => {
+                {visibleRows.map((email) => {
                   const meta = CLASSIFICATION_META[email.classification];
                   const isSpam = email.classification === "spam";
                   const read = isEmailRead(email.id);
@@ -426,6 +442,18 @@ export function InboxView() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {rows.length > displayLimit && (
+          <div className="flex justify-center border-t border-line py-3">
+            <button
+              type="button"
+              onClick={() => setDisplayLimit((prev) => prev + 25)}
+              className="btn-glass text-[12.5px]"
+            >
+              Show more ({rows.length - displayLimit} remaining)
+            </button>
           </div>
         )}
       </section>

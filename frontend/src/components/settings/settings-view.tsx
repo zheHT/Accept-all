@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bell, ExternalLink, Mail, Moon, Palette, ScanLine, ShieldCheck, Sun } from "lucide-react";
+import { Bell, ExternalLink, Mail, Moon, Palette, RefreshCw, ScanLine, ShieldCheck, Sun } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
 import { useTheme, type ThemeChoice } from "@/components/theme/theme-provider";
@@ -60,6 +60,22 @@ export function SettingsView() {
   return (
     <div className="flex flex-col gap-5">
       {settings.stale && <StaleNotice />}
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => {
+            void settings.refresh();
+            toast({ title: "Settings refreshed", tone: "info" });
+          }}
+          disabled={settings.loading}
+          aria-label="Refresh operational settings"
+          title="Refresh operational settings"
+          className="btn-glass active:scale-95 text-[12px]"
+        >
+          <RefreshCw className={cn("size-3.5", settings.loading && "animate-spin")} />
+          Refresh settings
+        </button>
+      </div>
       <Panel
         icon={Palette}
         title="Appearance"

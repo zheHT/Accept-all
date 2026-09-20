@@ -30,3 +30,6 @@ test_sub*.json
 *.sqlite3
 *.db
 *.parquet
+.firebase/
+firebase-debug.log
+*.log

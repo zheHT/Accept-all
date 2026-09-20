@@ -112,15 +112,29 @@ export default function KnowledgeBasePage() {
         title="Knowledge Base"
         subtitle="Weekly operational briefings, verified patterns, and the assumptions reviewers have governed over time."
         actions={
-          <button
-            type="button"
-            className="btn-primary active:scale-95"
-            disabled={publishing}
-            onClick={() => void publish()}
-          >
-            <RefreshCw className={cn("size-4", publishing && "animate-spin")} />
-            {publishing ? "Publishing…" : "Publish current week"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="btn-glass active:scale-95"
+              disabled={weeks.loading || registry.loading}
+              onClick={() => {
+                void Promise.all([weeks.refresh(), registry.refresh()]);
+                toast({ title: "Knowledge base refreshed", tone: "info" });
+              }}
+            >
+              <RefreshCw className={cn("size-3.5", (weeks.loading || registry.loading) && "animate-spin")} />
+              Refresh
+            </button>
+            <button
+              type="button"
+              className="btn-primary active:scale-95"
+              disabled={publishing}
+              onClick={() => void publish()}
+            >
+              <RefreshCw className={cn("size-4", publishing && "animate-spin")} />
+              {publishing ? "Publishing…" : "Publish current week"}
+            </button>
+          </div>
         }
       />
 

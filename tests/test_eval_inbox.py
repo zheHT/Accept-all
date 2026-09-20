@@ -2,12 +2,12 @@ import json
 
 import pytest
 
+from backend.evaluation_adapter.schemas import EmailCategory, EmailClassification
 from backend.extraction.schemas import (
     ComparisonStatus,
     DocumentPairResult,
     ValidationResult,
 )
-from backend.models.schemas import EmailCategory, EmailClassification
 from scripts.eval_inbox import (
     _classify_with_retry,
     _document_inputs,

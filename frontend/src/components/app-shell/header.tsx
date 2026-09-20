@@ -19,9 +19,8 @@ import { useDismiss } from "@/lib/use-dismiss";
 import { useToast } from "@/components/ui/toast";
 import { useTheme } from "@/components/theme/theme-provider";
 import { useAuth } from "@/components/auth/auth-provider";
-import { getDashboard } from "@/lib/api";
+import { useWorkspaceCounts } from "@/components/workspace/workspace-counts";
 import { fieldLabel, relativeTime } from "@/lib/live-view-models";
-import { useLiveQuery } from "@/lib/use-live-query";
 
 interface Notification {
   id: string;
@@ -49,7 +48,7 @@ export function Header() {
   const toast = useToast();
   const { user, signOut } = useAuth();
   const [openMenu, setOpenMenu] = useState<"none" | "notifications" | "user">("none");
-  const dashboard = useLiveQuery((signal) => getDashboard("week", signal), []);
+  const { dashboard } = useWorkspaceCounts();
   const notifications = useMemo<Notification[]>(() => (
     (dashboard.data?.attention_items || []).slice(0, 6).map((item) => {
       const failed = item.processing_state === "DEAD_LETTER";
@@ -90,14 +89,27 @@ export function Header() {
         </h1>
         <span className="hidden items-center gap-2 rounded-full bg-matched-50/80 px-2.5 py-1 text-[11px] font-medium text-matched-700 ring-1 ring-inset ring-matched-200 lg:inline-flex">
           <span className="relative flex size-1.5">
-            <span className="absolute inline-flex size-full animate-ping rounded-full bg-matched-500 opacity-60" />
             <span className="relative inline-flex size-1.5 rounded-full bg-matched-500" />
           </span>
-          Inbox sync active
+          On-demand sync
         </span>
       </div>
 
       <div ref={shellRef} className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            void dashboard.refresh();
+            toast({ title: "Workspace refreshed", tone: "info" });
+          }}
+          disabled={dashboard.loading}
+          aria-label="Refresh workspace"
+          title="Refresh workspace"
+          className="grid size-9 place-items-center rounded-xl text-ink-500 transition-colors hover:bg-surface/80 hover:text-ink-900 active:scale-95 disabled:opacity-50"
+        >
+          <RefreshCw className={cn("size-[17px]", dashboard.loading && "animate-spin")} strokeWidth={2} />
+        </button>
+
         <ThemeToggle />
 
         <div className="relative">

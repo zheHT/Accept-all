@@ -16,18 +16,20 @@ export const shouldPoll = (visibilityState: DocumentVisibilityState) =>
 export function useLiveQuery<T>(
   load: (signal: AbortSignal) => Promise<T>,
   dependencies: readonly unknown[] = [],
-  intervalMs = 15_000,
+  intervalMs: number | null = null,
 ): LiveQuery<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [stale, setStale] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const request = useRef<AbortController | null>(null);
+  const inFlight = useRef<boolean>(false);
 
   const refresh = useCallback(async () => {
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
+    inFlight.current = true;
     setLoading((current) => data === null || current);
     try {
       const next = await load(controller.signal);
@@ -42,24 +44,31 @@ export function useLiveQuery<T>(
         setStale(data !== null);
       }
     } finally {
-      if (!controller.signal.aborted) setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+        inFlight.current = false;
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, dependencies);
 
   useEffect(() => {
     void refresh();
+    if (!intervalMs || intervalMs <= 0) {
+      return () => {
+        request.current?.abort();
+      };
+    }
+
     const poll = window.setInterval(() => {
-      if (shouldPoll(document.visibilityState)) void refresh();
+      if (shouldPoll(document.visibilityState) && !inFlight.current) {
+        void refresh();
+      }
     }, intervalMs);
-    const resume = () => {
-      if (shouldPoll(document.visibilityState)) void refresh();
-    };
-    document.addEventListener("visibilitychange", resume);
+
     return () => {
       request.current?.abort();
       window.clearInterval(poll);
-      document.removeEventListener("visibilitychange", resume);
     };
   }, [intervalMs, refresh]);
 

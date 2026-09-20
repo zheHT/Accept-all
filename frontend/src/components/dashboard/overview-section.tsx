@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { TrendingDown, TrendingUp } from "lucide-react";
+import { RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { PeriodMenu } from "@/components/ui/period-menu";
 import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
@@ -39,7 +39,7 @@ export function OverviewSection() {
     writeParam("period", next === "week" ? null : next);
   };
 
-  if (query.loading && !query.data) return <LoadingState label="Loading dashboard metrics" />;
+  if (query.loading && !query.data) return <LoadingState label="Loading overview metrics" />;
   if (query.error && !query.data) {
     return <ErrorState message={query.error} retry={() => void query.refresh()} />;
   }
@@ -57,7 +57,20 @@ export function OverviewSection() {
             {data.caption} · <span className="text-ink-400">{data.rangeLabel}</span>
           </p>
         </div>
-        <PeriodMenu value={period} onChange={changePeriod} />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void query.refresh()}
+            disabled={query.loading}
+            aria-label="Refresh overview metrics"
+            title="Refresh overview metrics"
+            className="btn-glass px-3 py-1.5 text-[12px] active:scale-95"
+          >
+            <RefreshCw className={cn("size-3.5", query.loading && "animate-spin")} />
+            Refresh
+          </button>
+          <PeriodMenu value={period} onChange={changePeriod} />
+        </div>
       </div>
 
       <article className="glass glass-sheen p-6 lg:p-8">

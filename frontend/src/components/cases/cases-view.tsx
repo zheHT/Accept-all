@@ -66,6 +66,7 @@ export function CasesView() {
   const [sort, setSort] = useState<SortOrder>("newest");
   const [query, setQuery] = useState("");
   const [openCaseId, setOpenCaseId] = useState<string | null>(null);
+  const [displayLimit, setDisplayLimit] = useState(25);
 
   useEffect(() => {
     if (liveCases.data) setCases(liveCases.data.items.map(caseSummary));
@@ -176,6 +177,8 @@ export function CasesView() {
       sort === "oldest" ? b.updatedOrder - a.updatedOrder : a.updatedOrder - b.updatedOrder,
     );
   }, [cases, query, result, workflow, date, sort]);
+
+  const visibleRows = useMemo(() => rows.slice(0, displayLimit), [rows, displayLimit]);
 
   /**
    * One card per unresolved outcome (review first, then mismatch, then failure)
@@ -343,7 +346,18 @@ export function CasesView() {
           </div>
         </div>
 
-        <div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void liveCases.refresh()}
+            disabled={liveCases.loading}
+            aria-label="Refresh cases"
+            title="Refresh cases"
+            className="btn-glass active:scale-95"
+          >
+            <RefreshCw className={cn("size-3.5", liveCases.loading && "animate-spin")} />
+            Refresh
+          </button>
           <button
             type="button"
             onClick={clearFilters}
@@ -370,7 +384,9 @@ export function CasesView() {
             </p>
           </div>
           <span className="tabular shrink-0 text-[12px] text-ink-400">
-            {rows.length} of {cases.length} cases
+            {visibleRows.length < rows.length
+              ? `Showing ${visibleRows.length} of ${rows.length} cases`
+              : `${rows.length} of ${cases.length} cases`}
           </span>
         </header>
 
@@ -417,7 +433,7 @@ export function CasesView() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((item) => {
+                {visibleRows.map((item) => {
                   const action = ACTION_LABEL[item.action];
                   const ActionIcon = action.icon;
 
@@ -545,6 +561,18 @@ export function CasesView() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {rows.length > displayLimit && (
+          <div className="flex justify-center border-t border-line py-3">
+            <button
+              type="button"
+              onClick={() => setDisplayLimit((prev) => prev + 25)}
+              className="btn-glass text-[12.5px]"
+            >
+              Show more ({rows.length - displayLimit} remaining)
+            </button>
           </div>
         )}
       </section>
