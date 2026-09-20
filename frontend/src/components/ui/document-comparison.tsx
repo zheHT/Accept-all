@@ -254,7 +254,7 @@ function DocumentPane({
 
   const fileExt = (evidence.name.split(".").pop() || "DOC").toUpperCase();
   const isPdf = /pdf/i.test(evidence.contentType || "") || /\.pdf$/i.test(evidence.name);
-  const isImage = /^image\//i.test(evidence.contentType || "") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(evidence.name);
+  const canPreviewOriginal = isPdf;
 
   const pageCount = Math.max(position.pages || 1, evidence.pages || 1);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -265,10 +265,10 @@ function DocumentPane({
   }, [onLoadSource]);
 
   useEffect(() => {
-    if (position.mode === "original" && !sourceUrl && !sourceError && evidence.documentId) {
+    if (position.mode === "original" && canPreviewOriginal && !sourceUrl && !sourceError && evidence.documentId) {
       onLoadSourceRef.current();
     }
-  }, [evidence.documentId, position.mode, sourceError, sourceUrl]);
+  }, [canPreviewOriginal, evidence.documentId, position.mode, sourceError, sourceUrl]);
 
   useEffect(() => {
     if (position.mode === "text" && textRef.current) textRef.current.scrollTop = position.textScrollTop;
@@ -366,7 +366,7 @@ function DocumentPane({
             aria-selected={position.mode === "original"}
             onClick={() => {
               onChange({ mode: "original" });
-              if (!sourceUrl && !sourceError && evidence.documentId) onLoadSource();
+              if (canPreviewOriginal && !sourceUrl && !sourceError && evidence.documentId) onLoadSource();
             }}
             className={cn(
               "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
@@ -421,39 +421,22 @@ function DocumentPane({
       <div className="min-h-0 flex-1 bg-canvas/60">
         {position.mode === "original" ? (
           <div className="relative flex h-[min(65vh,720px)] min-h-[380px] flex-col">
-            {sourceUrl && !sourceError ? (
-              isImage ? (
-                <div className="flex flex-1 items-center justify-center overflow-auto p-4 bg-canvas/40">
-                  <img
-                    src={sourceUrl}
-                    alt={`${evidence.name} original view`}
-                    style={{
-                      transform: `scale(${position.zoom / 100})`,
-                      transformOrigin: "center center",
-                      transition: "transform 0.15s ease-out",
-                    }}
-                    className="max-h-full max-w-full rounded object-contain shadow-glass"
-                  />
-                </div>
-              ) : isPdf ? (
-                <iframe
-                  title={`${evidence.name} original view`}
-                  src={`${sourceUrl}#page=${Math.max(1, position.page)}&zoom=${position.zoom}`}
-                  className="min-h-0 flex-1 border-0 bg-white"
-                />
-              ) : (
-                <iframe
-                  title={`${evidence.name} original view`}
-                  src={sourceUrl}
-                  className="min-h-0 flex-1 border-0 bg-white"
-                />
-              )
+            {canPreviewOriginal && sourceUrl && !sourceError ? (
+              <iframe
+                title={`${evidence.name} original view`}
+                src={`${sourceUrl}#page=${Math.max(1, position.page)}&zoom=${position.zoom}`}
+                className="min-h-0 flex-1 border-0 bg-white"
+              />
             ) : (
               <div className="flex flex-1 flex-col overflow-hidden">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 bg-amber-500/10 px-3.5 py-2 text-[12px] text-amber-900 dark:text-amber-200">
                   <div className="flex items-center gap-2 font-medium">
                     <FileText className="size-3.5 shrink-0 text-amber-600" />
-                    <span>Original document file is unavailable in storage. Inspecting parsed text lines instead.</span>
+                    <span>
+                      {canPreviewOriginal
+                        ? "Original document file is unavailable in storage. Inspecting parsed text lines instead."
+                        : "This file type cannot be embedded safely. Inspecting parsed text lines instead."}
+                    </span>
                   </div>
                   <span className="rounded bg-amber-500/20 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase text-amber-800 dark:text-amber-300">
                     {fileExt} · Parsed View
