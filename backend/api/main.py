@@ -330,7 +330,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         case_id: str,
         field: str,
         request: FieldReviewRequest,
-        reviewer: dict[str, Any] = Depends(require_reviewer),  # noqa: B008
+        reviewer: dict[str, Any] = Depends(require_user),  # noqa: B008
     ) -> dict[str, Any]:
         case = get_case_or_404(case_id)
         if case.get("processing_state") in {"DRAFT", "QUEUED", "PROCESSING"}:
