@@ -148,9 +148,9 @@ export default function KnowledgeBasePage() {
         latest={latest}
       />
 
-      <section className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,.75fr)]">
-        <article className="glass glass-sheen min-w-0 overflow-hidden">
-          <header className="flex flex-col gap-3 border-b border-line px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <section className="grid min-w-0 gap-5 xl:max-h-[850px] xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,.75fr)]">
+        <article className="glass glass-sheen flex min-w-0 flex-col overflow-hidden">
+          <header className="flex shrink-0 flex-col gap-3 border-b border-line px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">Weekly briefings</h2>
               <p className="mt-1 text-[12.5px] text-ink-500">
@@ -163,12 +163,14 @@ export default function KnowledgeBasePage() {
           </header>
 
           {!publications.length ? (
-            <EmptyState
-              title="No weekly briefings yet"
-              detail="Publish the current week after reviewed operational cases are available."
-            />
+            <div className="flex flex-1 items-center justify-center p-6">
+              <EmptyState
+                title="No weekly briefings yet"
+                detail="Publish the current week after reviewed operational cases are available."
+              />
+            </div>
           ) : (
-            <ol className="max-h-[760px] divide-y divide-line overflow-y-auto overscroll-contain">
+            <ol className="flex-1 min-h-0 divide-y divide-line overflow-y-auto overscroll-contain max-h-[600px] xl:max-h-none">
               {publications.map((week, index) => (
                 <WeeklyBriefing
                   key={week.week}
@@ -182,8 +184,8 @@ export default function KnowledgeBasePage() {
           )}
         </article>
 
-        <article className="glass glass-sheen min-w-0 overflow-hidden">
-          <header className="border-b border-line px-5 py-4">
+        <article className="glass glass-sheen flex min-w-0 flex-col overflow-hidden">
+          <header className="shrink-0 border-b border-line px-5 py-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">Assumption registry</h2>
@@ -223,20 +225,28 @@ export default function KnowledgeBasePage() {
             </div>
           </header>
 
-          {registry.error && !registry.data ? (
-            <ErrorState message={registry.error} retry={() => void registry.refresh()} />
-          ) : registry.loading && !registry.data ? (
-            <LoadingState label="Loading governed assumptions" />
-          ) : !visibleAssumptions.length ? (
-            <EmptyState
-              title={assumptions.length ? "No assumptions match" : "No governed assumptions"}
-              detail={assumptions.length ? "Try another search or status filter." : "Reviewed assumptions will accumulate here."}
-            />
-          ) : (
-            <ul className="max-h-[760px] divide-y divide-line overflow-y-auto overscroll-contain">
-              {visibleAssumptions.map((item) => <AssumptionItem key={item.assumption_id} item={item} />)}
-            </ul>
-          )}
+          <div className="flex min-h-0 flex-1 flex-col">
+            {registry.error && !registry.data ? (
+              <div className="flex flex-1 items-center justify-center p-6">
+                <ErrorState message={registry.error} retry={() => void registry.refresh()} />
+              </div>
+            ) : registry.loading && !registry.data ? (
+              <div className="flex flex-1 items-center justify-center p-6">
+                <LoadingState label="Loading governed assumptions" />
+              </div>
+            ) : !visibleAssumptions.length ? (
+              <div className="flex flex-1 items-center justify-center p-6">
+                <EmptyState
+                  title={assumptions.length ? "No assumptions match" : "No governed assumptions"}
+                  detail={assumptions.length ? "Try another search or status filter." : "Reviewed assumptions will accumulate here."}
+                />
+              </div>
+            ) : (
+              <ul className="flex-1 min-h-0 divide-y divide-line overflow-y-auto overscroll-contain max-h-[600px] xl:max-h-none">
+                {visibleAssumptions.map((item) => <AssumptionItem key={item.assumption_id} item={item} />)}
+              </ul>
+            )}
+          </div>
         </article>
       </section>
 
@@ -417,7 +427,7 @@ function WeeklyBriefing({
 function AssumptionItem({ item }: { item: AssumptionRecord }) {
   const accepted = item.status === "accepted";
   return (
-    <li className="px-5 py-4">
+    <li className="px-5 py-4 transition-colors hover:bg-canvas/50">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[12.5px] font-semibold text-ink-900">{humanize(item.field)}</p>
