@@ -22,3 +22,11 @@ export function statusTone(status: CaseStatus, processing: CaseSummary["processi
   if (processing === "DEAD_LETTER") return "bg-failed-50 text-failed-700 ring-failed-200";
   return "bg-processing-50 text-processing-700 ring-processing-200";
 }
+
+export function sanitizeBranding(text?: string | null): string {
+  if (!text) return "";
+  return text
+    .replace(/ClassAll\s+Platform/gi, "ShipVerify Platform")
+    .replace(/ClassAll/gi, "ShipVerify");
+}
+

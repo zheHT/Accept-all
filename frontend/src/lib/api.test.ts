@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { API_BASE_URL, apiFetch, configureApiAuth, confirmSentDraft, getCases, getSession, prepareDraft, type CaseSummary } from "./api";
+import { API_BASE_URL, apiFetch, configureApiAuth, confirmSentDraft, getCases, getDocumentContent, getSession, prepareDraft, type CaseSummary } from "./api";
 import { statusLabel } from "./format";
 import { shouldPoll } from "./use-live-query";
 
@@ -90,6 +90,18 @@ describe("authenticated API client", () => {
     await expect(apiFetch("/api/cases/123/draft/prepare", { method: "POST" })).rejects.toThrow(
       "Endpoint not found (404). The backend service appears to be running an older build without this route."
     );
+  });
+
+  it("keeps the source filename on document blobs used by the browser preview", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("%PDF-1.7", {
+      headers: { "Content-Type": "application/pdf" },
+    })));
+
+    const { blob } = await getDocumentContent("case-1", "doc-1", "Draft Bill of Lading.pdf");
+
+    expect(blob).toBeInstanceOf(File);
+    expect(blob.name).toBe("Draft Bill of Lading.pdf");
+    expect(blob.type).toBe("application/pdf");
   });
 });
 

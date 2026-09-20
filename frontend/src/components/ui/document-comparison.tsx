@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { getDocumentContent } from "@/lib/api";
+import { downloadFile } from "@/lib/download-file";
 import type { DocumentEvidence } from "@/lib/review-data";
 
 type Layout = "side-by-side" | "stacked";
@@ -151,7 +152,7 @@ export function DocumentComparison({
     }
     setSourceErrors((current) => ({ ...current, [role]: undefined }));
     try {
-      const { blob, pages } = await getDocumentContent(doc.caseId, doc.documentId);
+      const { blob, pages } = await getDocumentContent(doc.caseId, doc.documentId, doc.name);
       const url = URL.createObjectURL(blob);
       setSourceUrls((current) => {
         if (current[role]) URL.revokeObjectURL(current[role]!);
@@ -281,15 +282,8 @@ function DocumentPane({
         return;
       }
       try {
-        const { blob } = await getDocumentContent(evidence.caseId, evidence.documentId);
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = evidence.name;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
+        const { blob } = await getDocumentContent(evidence.caseId, evidence.documentId, evidence.name);
+        downloadFile(blob, evidence.name);
       } catch (error) {
         setDownloadError(
           error instanceof Error ? error.message : "The original file could not be downloaded."
@@ -299,14 +293,7 @@ function DocumentPane({
     }
 
     const blob = new Blob([lines.join("\r\n")], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${evidence.name.replace(/\.[a-z0-9]+$/i, "")}-parsed.txt`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    downloadFile(blob, `${evidence.name.replace(/\.[a-z0-9]+$/i, "")}-parsed.txt`);
   };
 
   const unreadable = evidence.scanned && !evidence.rawText && !lines.length;

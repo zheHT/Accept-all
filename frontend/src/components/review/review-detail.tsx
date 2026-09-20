@@ -28,9 +28,11 @@ import {
   Download,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { Popconfirm, Steps, Tag } from "antd";
 import { useAuth } from "@/components/auth/auth-provider";
 import { type CaseDetail, getDocumentContent } from "@/lib/api";
 import { DocumentComparison } from "@/components/ui/document-comparison";
+import { downloadFile } from "@/lib/download-file";
 import {
   type ReviewCase,
   type ReviewDecision,
@@ -115,15 +117,8 @@ export function ReviewDetail({
     const doc = caseDetail.documents?.find((d) => d.filename === filename) || caseDetail.documents?.[0];
     if (doc) {
       try {
-        const { blob } = await getDocumentContent(caseDetail.case_id, doc.document_id);
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
+        const { blob } = await getDocumentContent(caseDetail.case_id, doc.document_id, filename);
+        downloadFile(blob, filename);
         return;
       } catch (e) {
         console.error("Failed to download binary document", e);
@@ -306,7 +301,7 @@ export function ReviewDetail({
                   }}
                   title="Previous field (←)"
                   aria-label="Previous field"
-                  className="rounded-md p-1 text-ink-600 transition hover:bg-surface hover:text-ink-900 active:scale-95"
+                  className="rounded-md p-1 text-ink-600 transition hover:bg-surface hover:text-ink-900 active:scale-95 cursor-pointer"
                 >
                   <ChevronLeft className="size-3.5" />
                 </button>
@@ -321,7 +316,7 @@ export function ReviewDetail({
                   }}
                   title="Next field (→)"
                   aria-label="Next field"
-                  className="rounded-md p-1 text-ink-600 transition hover:bg-surface hover:text-ink-900 active:scale-95"
+                  className="rounded-md p-1 text-ink-600 transition hover:bg-surface hover:text-ink-900 active:scale-95 cursor-pointer"
                 >
                   <ChevronRight className="size-3.5" />
                 </button>
@@ -380,7 +375,7 @@ export function ReviewDetail({
                 aria-selected={isSelected}
                 onClick={() => setSelectedField(field.field)}
                 className={cn(
-                  "flex flex-col items-start rounded-xl border p-3 text-left transition-all",
+                  "flex flex-col items-start rounded-xl border p-3 text-left transition-all cursor-pointer",
                   isSelected
                     ? "border-brand-500 bg-brand-50/70 shadow-glass ring-2 ring-brand-500/20"
                     : isResolved
@@ -485,7 +480,7 @@ export function ReviewDetail({
       {/* Source documents comparison */}
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <p className="eyebrow">Source documents — {activeFieldLabel}</p>
+          <h2 className="text-sm font-semibold text-ink-900">Source documents — {activeFieldLabel}</h2>
           <button
             type="button"
             onClick={() => setDualPreview(true)}
@@ -659,7 +654,7 @@ export function ReviewDetail({
             </div>
 
             <label className="mt-5 block">
-              <span className="eyebrow">Review notes (optional)</span>
+              <span className="text-xs font-medium text-ink-600">Review notes (optional)</span>
               <textarea
                 value={notes}
                 onChange={(event) => setNotes(event.target.value)}
@@ -724,19 +719,27 @@ export function ReviewDetail({
                 </button>
               )}
               {onFinalize && (
-                <button
-                  type="button"
+                <Popconfirm
+                  title="Finalize Verification"
+                  description="All 7 fields are verified. Are you ready to approve and close this case?"
+                  onConfirm={onFinalize}
+                  okText="Yes, Finalize"
+                  cancelText="Cancel"
                   disabled={!canFinalize}
-                  onClick={onFinalize}
-                  className={cn(
-                    "btn-primary",
-                    !canFinalize && "cursor-not-allowed opacity-45",
-                  )}
-                  title={canFinalize ? "Approve case verification" : "Resolve all 7 fields before approving"}
                 >
-                  <CheckCircle2 className="size-4" strokeWidth={2.25} />
-                  Finalize verification
-                </button>
+                  <button
+                    type="button"
+                    disabled={!canFinalize}
+                    className={cn(
+                      "btn-primary",
+                      !canFinalize && "cursor-not-allowed opacity-45",
+                    )}
+                    title={canFinalize ? "Approve case verification" : "Resolve all 7 fields before approving"}
+                  >
+                    <CheckCircle2 className="size-4" strokeWidth={2.25} />
+                    Finalize verification
+                  </button>
+                </Popconfirm>
               )}
             </div>
           </div>
@@ -754,7 +757,7 @@ export function ReviewDetail({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <p className="eyebrow">AI correction draft</p>
+                <h2 className="text-sm font-semibold text-ink-900">AI correction draft</h2>
                 {caseDetail.draft.delivery_mode === "live" || caseDetail.draft.has_live_gmail ? (
                   <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-600 dark:text-emerald-400 ring-1 ring-inset ring-emerald-500/20">
                     Live Gmail Synced
@@ -839,7 +842,7 @@ export function ReviewDetail({
 
           <div className="mt-4 flex flex-col gap-3">
             <label>
-              <span className="eyebrow">Subject</span>
+              <span className="text-xs font-medium text-ink-600">Subject</span>
               <input
                 value={draftSubject}
                 onChange={(event) => setDraftSubject(event.target.value)}
@@ -848,7 +851,7 @@ export function ReviewDetail({
               />
             </label>
             <label>
-              <span className="eyebrow">Message</span>
+              <span className="text-xs font-medium text-ink-600">Message</span>
               <textarea
                 value={draftBody}
                 onChange={(event) => setDraftBody(event.target.value)}
@@ -1018,16 +1021,12 @@ function EvidencePanel({
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="flex items-center gap-2">
-            <span
-              className={cn(
-                "rounded px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-white",
-                problem
-                  ? "bg-gradient-to-b from-review-500 to-review-700"
-                  : "bg-gradient-to-b from-brand-500 to-brand-700",
-              )}
+            <Tag
+              color={role === "SI" ? "blue" : "purple"}
+              className="font-mono text-[10.5px] font-semibold m-0"
             >
               {role}
-            </span>
+            </Tag>
             <span className="text-[14px] font-semibold tracking-tight text-ink-900">{title}</span>
           </p>
           <p className="mt-1.5 flex items-center gap-1.5 text-[12.5px] text-ink-500">
@@ -1168,28 +1167,15 @@ function DecisionOption({
 
 function WorkflowStrip({ currentIndex }: { currentIndex: number }) {
   return (
-    <section className="glass p-4">
-      <p className="eyebrow">Human review flow</p>
-      <ol className="mt-3 flex flex-wrap items-center gap-1.5">
-        {WORKFLOW_STEPS.map((step, index) => (
-          <li key={step} className="flex items-center gap-1.5">
-            <span
-              className={cn(
-                "rounded-lg px-2 py-1.5 text-[11px] font-medium ring-1 ring-inset",
-                index < currentIndex && "bg-brand-50 text-brand-700 ring-brand-200",
-                index === currentIndex &&
-                  "bg-gradient-to-b from-brand-500 to-brand-700 text-white ring-brand-700/40",
-                index > currentIndex && "bg-surface/70 text-ink-400 ring-line",
-              )}
-            >
-              {step}
-            </span>
-            {index < WORKFLOW_STEPS.length - 1 && (
-              <ArrowRight className="size-3 shrink-0 text-ink-300" strokeWidth={2.5} />
-            )}
-          </li>
-        ))}
-      </ol>
+    <section className="glass p-5">
+      <h2 className="mb-3 text-sm font-semibold text-ink-900">Human review workflow</h2>
+      <Steps
+        size="small"
+        current={currentIndex}
+        items={WORKFLOW_STEPS.map((step) => ({
+          title: <span className="text-xs font-semibold">{step}</span>,
+        }))}
+      />
     </section>
   );
 }

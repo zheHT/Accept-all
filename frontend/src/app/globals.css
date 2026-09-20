@@ -253,11 +253,22 @@
     color-scheme: dark;
   }
 
+  /* Interactive clickable elements */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="tab"]:not([aria-disabled="true"]),
+  .ant-segmented-item,
+  .ant-select-selector,
+  .cursor-click {
+    cursor: pointer;
+  }
+
   body {
     min-height: 100vh;
     color: var(--ink-900);
     background-color: var(--canvas);
     position: relative;
+    font-feature-settings: "tnum" 1;
   }
 
   body::before {

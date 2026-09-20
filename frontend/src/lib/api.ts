@@ -275,11 +275,11 @@ export const getDocumentDownload = (caseId: string, documentId: string) =>
 
 /** Fetch the source bytes with the configured auth token (signed file:// URLs are not reliable in-browser). */
 export interface DocumentContent {
-  blob: Blob;
+  blob: File;
   pages: number | null;
 }
 
-export async function getDocumentContent(caseId: string, documentId: string, signal?: AbortSignal): Promise<DocumentContent> {
+export async function getDocumentContent(caseId: string, documentId: string, filename: string, signal?: AbortSignal): Promise<DocumentContent> {
   const path = `/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}/content`;
   const request = async (forceRefresh: boolean) => {
     const token = await tokenProvider(forceRefresh);
@@ -307,7 +307,11 @@ export async function getDocumentContent(caseId: string, documentId: string, sig
     throw new ApiError(message, response.status);
   }
   const pageHeader = Number(response.headers.get("X-Document-Page-Count"));
-  return { blob: await response.blob(), pages: Number.isFinite(pageHeader) && pageHeader > 0 ? pageHeader : null };
+  const blob = await response.blob();
+  return {
+    blob: new File([blob], filename, { type: blob.type }),
+    pages: Number.isFinite(pageHeader) && pageHeader > 0 ? pageHeader : null,
+  };
 }
 
 export const reviewField = (

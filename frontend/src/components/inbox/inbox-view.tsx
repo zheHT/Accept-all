@@ -1,12 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, Paperclip, RefreshCw, Search, SearchX, X } from "lucide-react";
+import {
+  ClearOutlined,
+  EyeOutlined,
+  PaperClipOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+} from "@ant-design/icons";
+import { Avatar, Button, Card, Checkbox, Empty, Input, Select, Table, Tag, Tooltip, type TableColumnsType } from "antd";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
 import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
 import { useWorkspaceCounts } from "@/components/workspace/workspace-counts";
-import { ClassificationBadge, EmailStatusBadge } from "./badges";
 import { EmailDrawer } from "./email-drawer";
 import { IntakeBreakdown, type IntakeGroup } from "./intake-breakdown";
 import {
@@ -28,7 +34,6 @@ import {
   type InboxTypeFilter,
 } from "./inbox-filter";
 
-/** "other_requests" groups the three non-verification, non-spam categories. */
 type TypeFilter = InboxTypeFilter;
 type StatusFilter = InboxStatusFilter;
 type DateFilter = InboxDateFilter;
@@ -63,6 +68,14 @@ const SORT_OPTIONS: Array<{ value: SortOrder; label: string }> = [
   { value: "confidence", label: "Lowest Confidence" },
 ];
 
+const CLASSIFICATION_TAG_COLORS: Record<EmailClassification, string> = {
+  document_comparison: "blue",
+  new_si: "cyan",
+  invoice_query: "purple",
+  general: "geekblue",
+  spam: "default",
+};
+
 export function InboxView() {
   const toast = useToast();
   const { markEmailRead, isEmailRead } = useWorkspaceCounts();
@@ -78,100 +91,76 @@ export function InboxView() {
   const [sort, setSort] = useState<SortOrder>("newest");
   const [includeSpam, setIncludeSpam] = useState(false);
   const [selected, setSelected] = useState<InboxEmail | null>(null);
-  const [displayLimit, setDisplayLimit] = useState(25);
+  const [intakeGroup, setIntakeGroup] = useState<IntakeGroup>("all");
 
   useEffect(() => {
     if (inbox.data) setEmails(inbox.data.items.map(inboxSummary));
   }, [inbox.data]);
 
-  const totals = useMemo(() => ({
-    total: emails.length,
-    checks: emails.filter((email) => email.classification === "document_comparison").length,
-    spam: emails.filter((email) => email.classification === "spam").length,
-    other: emails.filter((email) => OTHER_REQUEST_TYPES.includes(email.classification)).length,
-  }), [emails]);
+  const totals = useMemo(
+    () => ({
+      total: emails.length,
+      checks: emails.filter((email) => email.classification === "document_comparison").length,
+      spam: emails.filter((email) => email.classification === "spam").length,
+      other: emails.filter((email) => OTHER_REQUEST_TYPES.includes(email.classification)).length,
+    }),
+    [emails],
+  );
 
-  /** `?email=<id>` opens an email directly, so a colleague can be sent a link. */
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get("email");
     const match = emails.find((email) => email.id === id);
     if (match) {
       setSelected(match);
       markEmailRead(match.id);
-      void getCase(match.id).then((detail) => setSelected(inboxDetail(detail))).catch(() => {});
     }
   }, [emails, markEmailRead]);
 
   const openEmail = useCallback(
-    (email: InboxEmail) => {
-      setSelected(email);
-      markEmailRead(email.id);
-      window.history.replaceState(null, "", `?email=${email.id}`);
-      void getCase(email.id)
-        .then((detail) => setSelected(inboxDetail(detail)))
-        .catch((error: unknown) => toast({
-          title: "Email details are temporarily unavailable",
-          description: error instanceof Error ? error.message : "Please retry.",
-          tone: "warning",
-        }));
+    (item: InboxEmail) => {
+      setSelected(item);
+      markEmailRead(item.id);
+      const url = new URL(window.location.href);
+      url.searchParams.set("email", item.id);
+      window.history.replaceState({}, "", url.toString());
+
+      if (item.caseRef) {
+        void getCase(item.caseRef)
+          .then((detail) => {
+            setEmails((current) =>
+              current.map((entry) => (entry.id === item.id ? inboxDetail(detail) : entry)),
+            );
+          })
+          .catch(() => {});
+      }
     },
-    [markEmailRead, toast],
+    [markEmailRead],
   );
 
   const closeEmail = useCallback(() => {
     setSelected(null);
-    window.history.replaceState(null, "", window.location.pathname);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("email");
+    url.searchParams.delete("doc");
+    window.history.replaceState({}, "", url.toString());
   }, []);
 
-  const handleEmailUpdated = useCallback(
-    (updated: InboxEmail) => {
-      setSelected(updated);
-      setEmails((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-      void inbox.refresh();
-    },
-    [inbox],
-  );
-
-  const sync = useCallback(async () => {
-    await inbox.refresh();
-    setLastSync(clock(new Date()));
-    toast({
-      title: "Mailbox refreshed",
-      description: "The latest Gmail-sourced cases are now shown.",
-      tone: "success",
-    });
-  }, [inbox, toast]);
-
-  /** The intake panel and the Classification select share one piece of state. */
-  const group: IntakeGroup =
-    type === "document_comparison"
-      ? "checks"
-      : type === "spam"
-        ? "spam"
-        : type === "other_requests"
-          ? "other"
-          : "all";
-
-  const selectGroup = (next: IntakeGroup) => {
-    setType(
-      next === "checks"
-        ? "document_comparison"
-        : next === "spam"
-          ? "spam"
-          : next === "other"
-            ? "other_requests"
-            : "all",
-    );
-    setIncludeSpam(next === "all" || next === "spam");
-  };
-
-  const selectType = (next: TypeFilter) => {
-    setType(next);
-    setIncludeSpam(next === "all" || next === "spam");
-  };
-
-  const filtersActive =
-    query.trim() !== "" || type !== "all" || status !== "all" || date !== "all" || sort !== "newest" || includeSpam;
+  const handleGroupSelect = useCallback((group: IntakeGroup) => {
+    setIntakeGroup(group);
+    if (group === "all") {
+      setType("all");
+      setIncludeSpam(true);
+    } else if (group === "checks") {
+      setType("document_comparison");
+      setIncludeSpam(false);
+    } else if (group === "other") {
+      setType("other_requests");
+      setIncludeSpam(false);
+    } else if (group === "spam") {
+      setType("spam");
+      setIncludeSpam(true);
+    }
+  }, []);
 
   const clearFilters = () => {
     setQuery("");
@@ -180,335 +169,331 @@ export function InboxView() {
     setDate("all");
     setSort("newest");
     setIncludeSpam(false);
+    setIntakeGroup("all");
   };
 
-  const rows = useMemo(() => {
-    return filterInboxEmails(emails, { query, type, status, date, sort, includeSpam });
-  }, [emails, query, type, status, date, sort, includeSpam]);
+  const filtersActive =
+    query.trim() !== "" ||
+    type !== "all" ||
+    status !== "all" ||
+    date !== "all" ||
+    sort !== "newest" ||
+    includeSpam;
 
-  const visibleRows = useMemo(() => rows.slice(0, displayLimit), [rows, displayLimit]);
+  const filtered = useMemo(
+    () =>
+      filterInboxEmails(emails, {
+        query,
+        type,
+        status,
+        date,
+        sort,
+        includeSpam,
+      }),
+    [emails, query, type, status, date, sort, includeSpam],
+  );
 
-  if (inbox.loading && !inbox.data) return <LoadingState label="Loading inbox" />;
+  const sync = async () => {
+    await inbox.refresh();
+    const now = new Date();
+    setLastSync(
+      `just now (${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
+    );
+    toast({
+      title: "Inbox updated",
+      description: "Fetched the latest batch of verification emails.",
+      tone: "info",
+    });
+  };
+
+  const initials = (name: string) =>
+    name
+      .split(/\s+/)
+      .map((part) => part[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase();
+
+  if (inbox.loading && !inbox.data) return <LoadingState label="Loading intake queue" />;
   if (inbox.error && !inbox.data) {
     return <ErrorState message={inbox.error} retry={() => void inbox.refresh()} />;
   }
 
+  const columns: TableColumnsType<InboxEmail> = [
+    {
+      title: "SENDER",
+      key: "sender",
+      render: (_, email) => {
+        const read = isEmailRead(email.id);
+        const meta = CLASSIFICATION_META[email.classification];
+        const isSpam = email.classification === "spam";
+
+        return (
+          <div className="flex items-center gap-3">
+            <span
+              className={cn("size-2 shrink-0 rounded-full", read ? "bg-transparent" : "bg-brand-500")}
+            />
+            <Avatar
+              size={34}
+              style={{
+                backgroundColor: meta.verifiable ? "#1677ff" : isSpam ? "#8c8c8c" : "#595959",
+                fontWeight: 600,
+                fontSize: 12,
+              }}
+            >
+              {initials(email.sender)}
+            </Avatar>
+            <div className="min-w-0">
+              <span
+                className={cn(
+                  "block truncate text-xs",
+                  read ? "font-normal text-ink-700" : "font-bold text-ink-900",
+                )}
+              >
+                {email.sender}
+              </span>
+              <span className="block max-w-[140px] truncate text-[11px] text-ink-400">
+                {email.senderEmail}
+              </span>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      title: "SUBJECT",
+      key: "subject",
+      render: (_, email) => {
+        const read = isEmailRead(email.id);
+        const isSpam = email.classification === "spam";
+
+        return (
+          <div className="max-w-[280px]">
+            <span
+              className={cn(
+                "block truncate text-xs",
+                read ? "font-normal text-ink-700" : "font-semibold text-ink-900",
+                isSpam && "text-ink-400",
+              )}
+            >
+              {email.subject}
+            </span>
+            <span className="block truncate text-[11px] text-ink-400 mt-0.5">{email.preview}</span>
+          </div>
+        );
+      },
+    },
+    {
+      title: "RECEIVED",
+      key: "received",
+      width: 120,
+      render: (_, email) => (
+        <div>
+          <span className="block text-xs font-semibold text-ink-700">{email.receivedTime}</span>
+          <span className="block text-[11px] capitalize text-ink-400">{email.receivedDay}</span>
+        </div>
+      ),
+    },
+    {
+      title: "CLASSIFICATION",
+      dataIndex: "classification",
+      key: "classification",
+      width: 160,
+      render: (classification: EmailClassification) => {
+        const meta = CLASSIFICATION_META[classification];
+        const color = CLASSIFICATION_TAG_COLORS[classification];
+        return <Tag color={color}>{meta.label}</Tag>;
+      },
+    },
+    {
+      title: "FILES",
+      key: "files",
+      align: "center",
+      width: 80,
+      render: (_, email) => (
+        email.attachments.length === 0 ? (
+          <span className="text-xs text-ink-300">—</span>
+        ) : (
+          <Tooltip title={email.attachments.map((f) => f.name).join(", ")}>
+            <Tag icon={<PaperClipOutlined />} className="cursor-help m-0">
+              {email.attachments.length}
+            </Tag>
+          </Tooltip>
+        )
+      ),
+    },
+    {
+      title: "STATUS",
+      dataIndex: "status",
+      key: "status",
+      width: 130,
+      render: (status: EmailStatus) => {
+        const meta = EMAIL_STATUS_META[status];
+        const color =
+          status === "completed"
+            ? "success"
+            : status === "ready_for_verification"
+              ? "blue"
+              : status === "needs_review"
+                ? "warning"
+                : status === "processing"
+                  ? "processing"
+                  : "default";
+        return <Tag color={color}>{meta.label}</Tag>;
+      },
+    },
+    {
+      title: "ACTION",
+      key: "action",
+      align: "right",
+      width: 90,
+      render: (_, email) => (
+        <Button
+          size="small"
+          icon={<EyeOutlined />}
+          onClick={(e) => {
+            e.stopPropagation();
+            openEmail(email);
+          }}
+        >
+          View
+        </Button>
+      ),
+    },
+  ];
+
   return (
-    <>
+    <div className="flex flex-col gap-6">
+      {inbox.stale && <StaleNotice />}
+
       <IntakeBreakdown
         totals={totals}
-        active={group}
-        onSelect={selectGroup}
+        active={intakeGroup}
+        onSelect={handleGroupSelect}
         syncing={inbox.loading}
         lastSync={lastSync}
         onSync={() => void sync()}
       />
 
-      {inbox.stale && <StaleNotice />}
-
-      <section className="glass glass-sheen flex flex-col gap-3 p-4">
+      {/* Filter and Search Card */}
+      <Card className="border-edge bg-surface/80 shadow-sm" styles={{ body: { padding: "16px 20px" } }}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-          <label className="relative flex-1 lg:min-w-[300px]">
-            <Search
-              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-400"
-              strokeWidth={2}
-            />
-            <input
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search sender, subject, or email..."
-              className="field-glass py-2.5 pl-9 pr-3"
-            />
-          </label>
+          <Input
+            placeholder="Search sender, subject, or email body..."
+            prefix={<SearchOutlined className="text-ink-400" />}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="flex-1"
+            allowClear
+          />
 
           <div className="flex flex-wrap items-center gap-2">
-            <FilterSelect
-              label="Classification filter"
+            <Select
+              style={{ width: 170 }}
               value={type}
               options={TYPE_OPTIONS}
-              onChange={selectType}
+              onChange={setType}
             />
-            <FilterSelect
-              label="Status filter"
+            <Select
+              style={{ width: 130 }}
               value={status}
               options={STATUS_OPTIONS}
               onChange={setStatus}
             />
-            <FilterSelect
-              label="Date filter"
+            <Select
+              style={{ width: 120 }}
               value={date}
               options={DATE_OPTIONS}
               onChange={setDate}
             />
-            <FilterSelect
-              label="Sort order"
+            <Select
+              style={{ width: 140 }}
               value={sort}
               options={SORT_OPTIONS}
               onChange={setSort}
             />
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void sync()}
-            disabled={inbox.loading}
-            aria-label="Refresh inbox"
-            title="Refresh inbox"
-            className="btn-glass active:scale-95"
-          >
-            <RefreshCw className={cn("size-3.5", inbox.loading && "animate-spin")} />
-            Refresh
-          </button>
-          <button
-            type="button"
-            onClick={clearFilters}
-            disabled={!filtersActive}
-            className={cn(
-              "btn-quiet",
-              !filtersActive && "cursor-not-allowed opacity-40 hover:bg-transparent",
-            )}
-          >
-            <X className="size-3.5" strokeWidth={2.25} />
-            Clear filters
-          </button>
-        </div>
-      </section>
-
-      <section className="glass glass-sheen overflow-hidden">
-        <header className="flex items-center justify-between gap-4 border-b border-line px-6 py-4">
-          <div>
-            <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">
-              Incoming email
-            </h2>
-            <p className="mt-1 text-[12.5px] text-ink-500">
-              Click an email to see its classification and attachments.
-            </p>
-          </div>
-          <span className="tabular shrink-0 text-[12px] text-ink-400">
-            {visibleRows.length < rows.length
-              ? `Showing ${visibleRows.length} of ${rows.length} emails`
-              : `${rows.length} of ${totals.total} emails`}
-          </span>
-        </header>
-
-        {rows.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 px-6 py-16 text-center">
-            <SearchX className="size-6 text-ink-300" strokeWidth={1.75} />
-            <p className="text-[14px] font-medium text-ink-700">No emails match these filters</p>
-            <p className="text-[13px] text-ink-400">
-              Try a different search term, or clear the filters to see the full inbox.
-            </p>
-            <button type="button" onClick={clearFilters} className="btn-glass mt-2">
-              Clear filters
-            </button>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1140px] border-separate border-spacing-0 text-left">
-              <thead className="bg-surface/45">
-                <tr className="text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-400">
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    Sender
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    Subject
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    Received
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    Classification
-                  </th>
-                  <th scope="col" className="px-4 py-3 text-center font-semibold">
-                    Files
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-semibold">
-                    Status
-                  </th>
-                  <th scope="col" className="px-4 py-3 text-right font-semibold">
-                    Action
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRows.map((email) => {
-                  const meta = CLASSIFICATION_META[email.classification];
-                  const isSpam = email.classification === "spam";
-                  const read = isEmailRead(email.id);
-
-                  return (
-                    <tr
-                      key={email.id}
-                      onClick={() => openEmail(email)}
-                      className="group cursor-pointer transition-colors hover:bg-surface/70"
-                    >
-                      <td className="border-t border-line px-4 py-4 align-middle">
-                        <span className="flex items-center gap-2.5">
-                          <span
-                            aria-hidden
-                            title={read ? "Read" : "Unread"}
-                            className={cn(
-                              "size-1.5 shrink-0 rounded-full",
-                              read ? "bg-transparent" : "bg-brand-500",
-                            )}
-                          />
-                          <span
-                            className={cn(
-                              "grid size-9 shrink-0 place-items-center rounded-full text-[12px] font-semibold",
-                              meta.verifiable
-                                ? "bg-gradient-to-br from-brand-400 to-brand-700 text-white shadow-brand"
-                                : isSpam
-                                  ? "bg-ink-900/5 text-ink-400 ring-1 ring-inset ring-line"
-                                  : "bg-surface text-ink-500 ring-1 ring-inset ring-line",
-                            )}
-                          >
-                            {initials(email.sender)}
-                          </span>
-                          <span className="min-w-0">
-                            <span
-                              className={cn(
-                                "block truncate text-[13px] font-semibold",
-                                isSpam ? "text-ink-500" : "text-ink-900",
-                              )}
-                            >
-                              {email.sender}
-                            </span>
-                            <span className="block max-w-[140px] truncate text-[11.5px] text-ink-400">
-                              {email.senderEmail}
-                            </span>
-                          </span>
-                        </span>
-                      </td>
-
-                      <td className="border-t border-line px-4 py-4 align-middle">
-                        <span
-                          className={cn(
-                            "block max-w-[280px] truncate text-[13px]",
-                            read ? "font-normal" : "font-semibold",
-                            isSpam ? "text-ink-400" : "text-ink-900",
-                          )}
-                        >
-                          {email.subject}
-                        </span>
-                        <span className="mt-1 block max-w-[280px] truncate text-[12px] text-ink-400">
-                          {email.preview}
-                        </span>
-                      </td>
-
-                      <td className="border-t border-line px-4 py-4 align-middle">
-                        <span className="tabular block text-[13px] font-medium text-ink-700">
-                          {email.receivedTime}
-                        </span>
-                        <span className="block text-[11.5px] capitalize text-ink-400">
-                          {email.receivedDay}
-                        </span>
-                      </td>
-
-                      <td className="border-t border-line px-4 py-4 align-middle">
-                        <ClassificationBadge classification={email.classification} />
-                      </td>
-
-                      <td className="border-t border-line px-4 py-4 text-center align-middle">
-                        {email.attachments.length === 0 ? (
-                          <span className="text-[13px] text-ink-300">—</span>
-                        ) : (
-                          <span
-                            title={email.attachments.map((file) => file.name).join(", ")}
-                            className="tabular inline-flex items-center gap-1 rounded-md bg-surface/80 px-1.5 py-0.5 text-[12px] font-medium text-ink-700 ring-1 ring-inset ring-line"
-                          >
-                            <Paperclip className="size-3 text-ink-400" strokeWidth={2.25} />
-                            {email.attachments.length}
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="border-t border-line px-4 py-4 align-middle">
-                        <EmailStatusBadge status={email.status} />
-                      </td>
-
-                      <td className="border-t border-line px-4 py-4 text-right align-middle">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openEmail(email);
-                          }}
-                          className="btn-glass px-3 py-1.5 text-[12px] group-hover:border-brand-200 group-hover:text-brand-700"
-                        >
-                          View
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {rows.length > displayLimit && (
-          <div className="flex justify-center border-t border-line py-3">
-            <button
-              type="button"
-              onClick={() => setDisplayLimit((prev) => prev + 25)}
-              className="btn-glass text-[12.5px]"
+            <Checkbox
+              checked={includeSpam}
+              onChange={(e) => setIncludeSpam(e.target.checked)}
+              className="text-xs text-ink-700"
             >
-              Show more ({rows.length - displayLimit} remaining)
-            </button>
+              Include spam
+            </Checkbox>
+            <Button
+              icon={<ReloadOutlined className={cn(inbox.loading && "animate-spin")} />}
+              onClick={() => void sync()}
+              disabled={inbox.loading}
+            >
+              Refresh
+            </Button>
+            <Button
+              icon={<ClearOutlined />}
+              onClick={clearFilters}
+              disabled={!filtersActive}
+            >
+              Clear
+            </Button>
           </div>
-        )}
-      </section>
+        </div>
+      </Card>
 
-      <EmailDrawer email={selected} onClose={closeEmail} onEmailUpdated={handleEmailUpdated} />
-    </>
-  );
-}
-
-function FilterSelect<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: T;
-  options: Array<{ value: T; label: string }>;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <label className="relative">
-      <span className="sr-only">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value as T)}
-        className="field-glass w-auto cursor-pointer appearance-none py-2.5 pl-3 pr-9 font-medium"
+      {/* Emails Table */}
+      <Card
+        className="border-edge bg-surface/80 shadow-sm overflow-hidden"
+        styles={{
+          header: { padding: "16px 24px" },
+          body: { padding: 0 },
+        }}
+        title={
+          <div>
+            <h2 className="text-base font-bold text-ink-900">Incoming Email</h2>
+            <p className="text-xs font-normal text-ink-500 mt-0.5">
+              Click an email to inspect its AI classification and attachments.
+            </p>
+          </div>
+        }
+        extra={
+          <span className="text-xs text-ink-400">
+            {filtered.length} of {totals.total} emails
+          </span>
+        }
       >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-      <ChevronDown
-        className="pointer-events-none absolute right-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-400"
-        strokeWidth={2.25}
+        <Table<InboxEmail>
+          rowKey="id"
+          columns={columns}
+          dataSource={filtered}
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            pageSizeOptions: ["10", "25", "50"],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} emails`,
+          }}
+          onRow={(record) => ({
+            onClick: () => openEmail(record),
+            className: "cursor-pointer hover:bg-surface/90 transition-colors",
+          })}
+          locale={{
+            emptyText: (
+              <div className="py-12 text-center">
+                <Empty description={<span className="text-ink-500">No emails match these filters.</span>}>
+                  <Button type="primary" onClick={clearFilters}>
+                    Clear Filters
+                  </Button>
+                </Empty>
+              </div>
+            ),
+          }}
+        />
+      </Card>
+
+      {/* Email Drawer */}
+      <EmailDrawer
+        email={selected}
+        onClose={closeEmail}
+        onEmailUpdated={(updated) =>
+          setEmails((prev) => prev.map((e) => (e.id === updated.id ? updated : e)))
+        }
       />
-    </label>
+    </div>
   );
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("");
-}
-
-/** "10:42 AM" */
-function clock(date: Date): string {
-  return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }

@@ -27,11 +27,13 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { Steps, Tag } from "antd";
 import { useToast } from "@/components/ui/toast";
 import { DocumentPreview, type PreviewDocument } from "@/components/ui/document-preview";
 import { DocumentComparison } from "@/components/ui/document-comparison";
 import { pendingDocumentBody } from "@/lib/document-text";
-import { ClassificationBadge, EmailStatusBadge } from "./badges";
+import { downloadFile } from "@/lib/download-file";
+import { EmailStatusBadge } from "./badges";
 import {
   CLASSIFICATION_META,
   type InboxEmail,
@@ -54,6 +56,14 @@ import {
 } from "@/lib/api";
 import { reviewDetail, inboxDetail, bytesLabel } from "@/lib/live-view-models";
 import type { DocumentEvidence, ReviewCase } from "@/lib/review-data";
+
+const CLASSIFICATION_TAG_COLORS = {
+  document_comparison: "blue",
+  new_si: "cyan",
+  invoice_query: "purple",
+  general: "default",
+  spam: "red",
+} satisfies Record<InboxEmail["classification"], string>;
 
 /**
  * Email detail view.
@@ -139,15 +149,8 @@ export function EmailDrawer({
     if (!currentEmail) return;
     setDownloading(true);
     try {
-      const { blob } = await getDocumentContent(currentEmail.id, docId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const { blob } = await getDocumentContent(currentEmail.id, docId, filename);
+      downloadFile(blob, filename);
       toast({ title: "SI Artifact downloaded", description: `${filename} saved.`, tone: "success" });
     } catch (err) {
       try {
@@ -235,6 +238,7 @@ export function EmailDrawer({
   const currentConfidence = currentEmail.confidence;
   const currentReasoning = currentEmail.classificationNote;
   const meta = CLASSIFICATION_META[currentClassification];
+  const ClassificationIcon = meta.icon;
   const si = currentEmail.attachments.find((file) => file.role === "SI");
   const bl = currentEmail.attachments.find((file) => file.role === "BL");
 
@@ -293,7 +297,13 @@ export function EmailDrawer({
         <header className="flex items-start gap-4 border-b border-line px-6 py-5">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <ClassificationBadge classification={currentClassification} />
+              <Tag
+                color={CLASSIFICATION_TAG_COLORS[currentClassification]}
+                icon={<ClassificationIcon className="size-3.5" strokeWidth={2.25} />}
+                title={meta.hint}
+              >
+                {meta.label}
+              </Tag>
               <EmailStatusBadge status={currentEmail.status} />
               {currentEmail.assignedTeam && (
                 <span className="inline-flex items-center gap-1 rounded-md bg-surface px-2 py-0.5 text-[11px] font-medium text-ink-700 ring-1 ring-inset ring-line">
@@ -347,10 +357,15 @@ export function EmailDrawer({
           <section className="mt-5 rounded-xl border border-edge bg-surface/60 p-4">
             <div className="flex items-center gap-2">
               <Sparkles className="size-3.5 text-brand-600" strokeWidth={2.25} />
-              <p className="eyebrow">Production classification</p>
+              <h3 className="text-sm font-semibold text-ink-900">Production classification</h3>
             </div>
             <div className="mt-3 flex items-center gap-3">
-              <span className="text-[14px] font-semibold text-ink-900">{meta.label}</span>
+              <Tag
+                color={CLASSIFICATION_TAG_COLORS[currentClassification]}
+                icon={<ClassificationIcon className="size-3.5" strokeWidth={2.25} />}
+              >
+                {meta.label}
+              </Tag>
             </div>
             <div className="mt-3 flex items-center gap-3">
               <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface ring-1 ring-inset ring-line">
@@ -802,7 +817,7 @@ export function EmailDrawer({
           {/* Non-comparison attachments */}
           {!meta.verifiable && currentEmail.attachments.length > 0 && (
             <div className="mt-5 rounded-xl border border-line bg-surface/50 p-4">
-              <p className="eyebrow mb-2">Attachments ({currentEmail.attachments.length})</p>
+              <h3 className="mb-2 text-sm font-semibold text-ink-900">Attachments ({currentEmail.attachments.length})</h3>
               <ul className="flex flex-col gap-2">
                 {currentEmail.attachments.map((file) => (
                   <li key={file.name}>
@@ -825,7 +840,7 @@ export function EmailDrawer({
           )}
 
           <section className="mt-6">
-            <p className="eyebrow">Message</p>
+            <h3 className="text-sm font-semibold text-ink-900">Message</h3>
             <div className="mt-3 flex flex-col gap-3 text-[13.5px] leading-relaxed text-ink-700">
               {currentEmail.body.map((paragraph, index) => (
                 <p key={index} className="whitespace-pre-line">
@@ -1027,27 +1042,17 @@ function Workflow({ email }: { email: InboxEmail }) {
 
   return (
     <section className="mt-6 rounded-xl border border-edge bg-surface/55 p-4">
-      <p className="eyebrow">Workflow Lifecycle</p>
-      <ol className="mt-3 flex items-center gap-1.5 overflow-x-auto pb-1">
-        {steps.map((step, index) => (
-          <li key={step.label} className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span
-              className={cn(
-                "min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-center text-[11px] font-medium ring-1 ring-inset",
-                step.state === "done" && "bg-brand-50 text-brand-700 ring-brand-200",
-                step.state === "current" &&
-                  "bg-gradient-to-b from-brand-500 to-brand-700 text-white ring-brand-700/40",
-                step.state === "todo" && "bg-surface/70 text-ink-400 ring-line",
-              )}
-            >
-              {step.label}
-            </span>
-            {index < steps.length - 1 && (
-              <ArrowRight className="size-3 shrink-0 text-ink-300" strokeWidth={2.5} />
-            )}
-          </li>
-        ))}
-      </ol>
+      <h3 className="text-sm font-semibold text-ink-900">Workflow lifecycle</h3>
+      <Steps
+        aria-label="Email workflow lifecycle"
+        className="mt-3"
+        size="small"
+        responsive
+        items={steps.map((step) => ({
+          title: step.label,
+          status: step.state === "done" ? "finish" : step.state === "current" ? "process" : "wait",
+        }))}
+      />
     </section>
   );
 }
