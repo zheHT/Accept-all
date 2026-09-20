@@ -441,7 +441,7 @@ export function ReviewDetail({
             className="btn-glass px-3 py-1.5 text-[12px]"
           >
             <Columns2 className="size-3.5" strokeWidth={2} />
-            Compare Side by Side (PDF & Text)
+            Compare Side by Side (Original & Text)
           </button>
         </div>
 

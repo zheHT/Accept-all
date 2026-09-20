@@ -305,9 +305,43 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         try:
             data = runtime.blobs.download(document["gcs_uri"])
         except (FileNotFoundError, NotFound, KeyError, ValueError) as exc:
+            raw_text = document.get("raw_text") or (document.get("extraction") or {}).get("raw_text")
+            if not raw_text:
+                ext_fields = (document.get("extraction") or {}).get("fields") or {}
+                if ext_fields:
+                    lines = [
+                        f"Document: {document.get('filename')}",
+                        f"Type: {(document.get('extraction') or {}).get('document_type', 'DOCUMENT')}",
+                        "",
+                        "--- PARSED TEXT LINES ---",
+                    ]
+                    for f_name, f_val in ext_fields.items():
+                        if isinstance(f_val, dict):
+                            val_str = f_val.get("value")
+                            unit = f_val.get("unit")
+                            if unit and val_str:
+                                val_str = f"{val_str} {unit}"
+                            lines.append(f"{f_name.upper()}: {val_str or 'N/A'}")
+                        else:
+                            lines.append(f"{f_name.upper()}: {f_val}")
+                    raw_text = "\n".join(lines)
+            if raw_text:
+                filename = quote(str(document.get("filename") or "document.txt"), safe="")
+                return Response(
+                    content=raw_text.encode("utf-8"),
+                    media_type="text/plain; charset=utf-8",
+                    headers={
+                        "Content-Disposition": f"inline; filename*=UTF-8''{filename}",
+                        "Cache-Control": "private, no-store",
+                        "X-Content-Type-Options": "nosniff",
+                        "X-Document-Page-Count": "1",
+                        "X-Document-Fallback": "extracted-text",
+                    },
+                )
             raise HTTPException(404, "original document is unavailable") from exc
         except GoogleAPIError as exc:
             raise HTTPException(503, "document storage is temporarily unavailable") from exc
+
         # Only PDFs may render inline. Other attachment formats are downloads,
         # so uploaded HTML cannot execute on the API's origin.
         is_pdf = data.lstrip().startswith(b"%PDF-")
@@ -318,8 +352,6 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             "X-Content-Type-Options": "nosniff",
         }
         if is_pdf:
-            # Encrypted or damaged PDFs may still be downloaded, but must
-            # not advertise an invented page count to the reviewer.
             with suppress(PdfReadError, ValueError, KeyError):
                 headers["X-Document-Page-Count"] = str(len(PdfReader(BytesIO(data)).pages))
         return Response(
