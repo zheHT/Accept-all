@@ -250,8 +250,6 @@ export default function KnowledgeBasePage() {
         </article>
       </section>
 
-      <KnowledgeFlow />
-
       <KnowledgePreview preview={preview} onClose={() => setPreview(null)} />
     </div>
   );
@@ -451,30 +449,6 @@ function AssumptionItem({ item }: { item: AssumptionRecord }) {
   );
 }
 
-function KnowledgeFlow() {
-  const steps = [
-    { title: "Reviewed cases", detail: "Only stored operational evidence enters the weekly run." },
-    { title: "Weekly synthesis", detail: "Counts, outcomes, and recurring assumptions are summarized." },
-    { title: "Governed registry", detail: "Accepted and proposed interpretations remain traceable." },
-    { title: "Rendered briefing", detail: "Reviewers read a safe document preview, never raw stored HTML." },
-  ];
-  return (
-    <section className="glass glass-sheen overflow-hidden">
-      <header className="border-b border-line px-5 py-4">
-        <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">Knowledge publication flow</h2>
-      </header>
-      <ol className="grid divide-y divide-line sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4">
-        {steps.map((step, index) => (
-          <li key={step.title} className="px-5 py-4">
-            <p className="font-mono text-[10px] font-semibold text-brand-600">0{index + 1}</p>
-            <p className="mt-2 text-[12.5px] font-semibold text-ink-900">{step.title}</p>
-            <p className="mt-1 text-pretty text-[11.5px] leading-5 text-ink-400">{step.detail}</p>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
 
 function KnowledgePreview({
   preview,
