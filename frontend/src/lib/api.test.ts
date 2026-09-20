@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiFetch, configureApiAuth, type CaseSummary } from "./api";
+import { apiFetch, configureApiAuth, getSession, type CaseSummary } from "./api";
 import { statusLabel } from "./format";
 import { shouldPoll } from "./use-live-query";
 
@@ -9,6 +9,12 @@ afterEach(() => {
 });
 
 describe("authenticated API client", () => {
+  it("loads the signed-in user's role from the session endpoint", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ uid: "user-1", is_admin: false })));
+
+    await expect(getSession()).resolves.toEqual({ uid: "user-1", is_admin: false });
+  });
+
   it("adds the ID token and refreshes it once after a 401", async () => {
     const tokens: string[] = [];
     let refreshed = false;

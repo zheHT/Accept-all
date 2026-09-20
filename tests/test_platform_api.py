@@ -97,6 +97,7 @@ def test_telegram_email_controls_show_and_update_hourly_limit(runtime):
 
 
 def test_telegram_week_command_returns_published_summary(runtime):
+    runtime.settings.telegram_admin_chat_id = "42"
     runtime.repository.save_knowledge_base_week(
         {
             "week": "2026-W38",
@@ -112,9 +113,7 @@ def test_telegram_week_command_returns_published_summary(runtime):
     )
     assert response.status_code == 200
     assert "Three recurring consignee issues were found." in runtime.telegram.messages[-1][1]
-    assert runtime.telegram.messages[-1][2]["inline_keyboard"][0][0]["url"] == (
-        "https://docs.google.com/document/d/doc-1/edit"
-    )
+    assert runtime.telegram.messages[-1][2]["inline_keyboard"][0][0]["url"].endswith("/knowledge-base")
 
 
 def test_telegram_notifications_changes_are_admin_only(runtime):

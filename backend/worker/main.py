@@ -5,12 +5,14 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from google.auth.exceptions import RefreshError
 
 from backend.core.config import get_settings
 from backend.core.processing import CaseProcessor
 from backend.core.runtime import Runtime, build_runtime
+from backend.integrations.knowledge import secure_knowledge_publisher
+from backend.worker.auth import require_worker_auth
 from backend.worker.gmail_ingest import process_gmail_notification, reconcile_recent_gmail
 
 
@@ -41,6 +43,7 @@ def _pubsub_data(envelope: dict[str, Any]) -> dict[str, Any]:
 
 def create_app(runtime: Runtime | None = None) -> FastAPI:
     runtime = runtime or build_runtime(get_settings())
+    secure_knowledge_publisher(runtime)
     processor = CaseProcessor(
         runtime.repository,
         runtime.blobs,
@@ -56,7 +59,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return {"status": "ok", "service": "classall-worker"}
 
     @app.post("/internal/pubsub/doc-task")
-    def document_task(envelope: dict[str, Any]) -> dict[str, Any]:
+    def document_task(envelope: dict[str, Any], request: Request) -> dict[str, Any]:
+        require_worker_auth(request, runtime.settings.app_env, "pubsub")
         payload = _pubsub_data(envelope)
         case_id = payload.get("case_id")
         if not case_id:
@@ -65,7 +69,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return {"case_id": case_id, "state": case.get("processing_state") if case else None}
 
     @app.post("/internal/pubsub/gmail-event")
-    def gmail_event(envelope: dict[str, Any]) -> dict[str, Any]:
+    def gmail_event(envelope: dict[str, Any], request: Request) -> dict[str, Any]:
+        require_worker_auth(request, runtime.settings.app_env, "pubsub")
         notification = _pubsub_data(envelope)
         try:
             case_ids = process_gmail_notification(runtime, notification)
@@ -76,7 +81,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return {"accepted": len(case_ids), "case_ids": case_ids}
 
     @app.post("/internal/cron/gmail-watch")
-    def gmail_watch() -> dict[str, Any]:
+    def gmail_watch(request: Request) -> dict[str, Any]:
+        require_worker_auth(request, runtime.settings.app_env, "scheduler")
         topic = (
             f"projects/{runtime.settings.google_cloud_project}/topics/"
             f"{runtime.settings.gmail_events_topic}"
@@ -98,7 +104,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return {"history_id": watch["historyId"], "reconciled_cases": len(reconciled)}
 
     @app.post("/internal/cron/gmail-reconcile")
-    def gmail_reconcile() -> dict[str, Any]:
+    def gmail_reconcile(request: Request) -> dict[str, Any]:
+        require_worker_auth(request, runtime.settings.app_env, "scheduler")
         limit = int(
             runtime.repository.get_platform_settings().get(
                 "gmail_reconcile_limit", runtime.settings.gmail_reconcile_limit
@@ -115,7 +122,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return {"accepted": len(case_ids), "limit": limit, "case_ids": case_ids}
 
     @app.get("/api/cron/summary")
-    def weekly_summary() -> dict[str, Any]:
+    def weekly_summary(request: Request) -> dict[str, Any]:
+        require_worker_auth(request, runtime.settings.app_env, "scheduler")
         year, week, _ = datetime.now(UTC).isocalendar()
         iso_week = f"{year}-W{week:02d}"
         if not runtime.repository.claim_weekly_summary(iso_week):
@@ -123,7 +131,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         try:
             published = runtime.knowledge_publisher.publish_weekly(iso_week)
             if runtime.settings.telegram_admin_chat_id:
-                drive_link = published.get("drive_url", "N/A")
+                drive_link = f"{runtime.settings.dashboard_base_url.rstrip('/')}/knowledge-base"
                 runtime.telegram.send_message(
                     runtime.settings.telegram_admin_chat_id,
                     "<b>ClassAll weekly summary & Knowledge Base published</b>\n"

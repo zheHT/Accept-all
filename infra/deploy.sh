@@ -82,6 +82,9 @@ gcloud run deploy classall-api \
 API_URL=$(gcloud run services describe classall-api --region "$REGION" --project "$PROJECT_ID" --format="value(status.url)")
 WORKER_URL=$(gcloud run services describe classall-worker --region "$REGION" --project "$PROJECT_ID" --format="value(status.url)")
 
+gcloud run services update classall-worker --region "$REGION" --project "$PROJECT_ID" \
+    --update-env-vars="WORKER_AUTH_AUDIENCE=${WORKER_URL},WORKER_PUBSUB_INVOKER_EMAIL=classall-pubsub-invoker@${PROJECT_ID}.iam.gserviceaccount.com,WORKER_SCHEDULER_INVOKER_EMAIL=classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" >/dev/null
+
 gcloud run services update classall-api --region "$REGION" --project "$PROJECT_ID" \
     --update-env-vars="GMAIL_OAUTH_REDIRECT_URI=${API_URL}/api/integrations/gmail/oauth/callback,API_BASE_URL=${API_URL}" >/dev/null
 
@@ -97,9 +100,15 @@ if ! gcloud pubsub subscriptions describe doc-tasks-worker --project "$PROJECT_I
         --topic=doc-tasks \
         --push-endpoint="${WORKER_URL}/internal/pubsub/doc-task" \
         --push-auth-service-account="classall-pubsub-invoker@${PROJECT_ID}.iam.gserviceaccount.com" \
+        --push-auth-token-audience="$WORKER_URL" \
         --ack-deadline=600 \
         --dead-letter-topic=doc-dead-letter \
         --max-delivery-attempts=5
+else
+    gcloud pubsub subscriptions update doc-tasks-worker --project "$PROJECT_ID" \
+        --push-endpoint="${WORKER_URL}/internal/pubsub/doc-task" \
+        --push-auth-service-account="classall-pubsub-invoker@${PROJECT_ID}.iam.gserviceaccount.com" \
+        --push-auth-token-audience="$WORKER_URL"
 fi
 
 if ! gcloud pubsub subscriptions describe gmail-events-worker --project "$PROJECT_ID" >/dev/null 2>&1; then
@@ -108,9 +117,15 @@ if ! gcloud pubsub subscriptions describe gmail-events-worker --project "$PROJEC
         --topic=gmail-events \
         --push-endpoint="${WORKER_URL}/internal/pubsub/gmail-event" \
         --push-auth-service-account="classall-pubsub-invoker@${PROJECT_ID}.iam.gserviceaccount.com" \
+        --push-auth-token-audience="$WORKER_URL" \
         --ack-deadline=600 \
         --dead-letter-topic=doc-dead-letter \
         --max-delivery-attempts=5
+else
+    gcloud pubsub subscriptions update gmail-events-worker --project "$PROJECT_ID" \
+        --push-endpoint="${WORKER_URL}/internal/pubsub/gmail-event" \
+        --push-auth-service-account="classall-pubsub-invoker@${PROJECT_ID}.iam.gserviceaccount.com" \
+        --push-auth-token-audience="$WORKER_URL"
 fi
 
 PUBSUB_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com"
@@ -126,31 +141,31 @@ echo "Configuring Cloud Scheduler jobs..."
 if gcloud scheduler jobs describe gmail-hourly-reconciliation --location "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
     gcloud scheduler jobs update http gmail-hourly-reconciliation --location "$REGION" --project "$PROJECT_ID" \
         --schedule="$GMAIL_RECONCILE_SCHEDULE" --time-zone="Asia/Kuala_Lumpur" --uri="${WORKER_URL}/internal/cron/gmail-reconcile" \
-        --http-method=POST --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com"
+        --http-method=POST --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" --oidc-token-audience="$WORKER_URL"
 else
     gcloud scheduler jobs create http gmail-hourly-reconciliation --location "$REGION" --project "$PROJECT_ID" \
         --schedule="$GMAIL_RECONCILE_SCHEDULE" --time-zone="Asia/Kuala_Lumpur" --uri="${WORKER_URL}/internal/cron/gmail-reconcile" \
-        --http-method=POST --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com"
+        --http-method=POST --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" --oidc-token-audience="$WORKER_URL"
 fi
 
 if gcloud scheduler jobs describe gmail-watch-renewal --location "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
     gcloud scheduler jobs update http gmail-watch-renewal --location "$REGION" --project "$PROJECT_ID" \
         --schedule="0 3 * * *" --time-zone="Asia/Kuala_Lumpur" --uri="${WORKER_URL}/internal/cron/gmail-watch" \
-        --http-method=POST --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com"
+        --http-method=POST --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" --oidc-token-audience="$WORKER_URL"
 else
     gcloud scheduler jobs create http gmail-watch-renewal --location "$REGION" --project "$PROJECT_ID" \
         --schedule="0 3 * * *" --time-zone="Asia/Kuala_Lumpur" --uri="${WORKER_URL}/internal/cron/gmail-watch" \
-        --http-method=POST --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com"
+        --http-method=POST --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" --oidc-token-audience="$WORKER_URL"
 fi
 
 if gcloud scheduler jobs describe weekly-case-summary --location "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
     gcloud scheduler jobs update http weekly-case-summary --location "$REGION" --project "$PROJECT_ID" \
         --schedule="0 9 * * 1" --time-zone="Asia/Kuala_Lumpur" --uri="${WORKER_URL}/api/cron/summary" \
-        --http-method=GET --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com"
+        --http-method=GET --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" --oidc-token-audience="$WORKER_URL"
 else
     gcloud scheduler jobs create http weekly-case-summary --location "$REGION" --project "$PROJECT_ID" \
         --schedule="0 9 * * 1" --time-zone="Asia/Kuala_Lumpur" --uri="${WORKER_URL}/api/cron/summary" \
-        --http-method=GET --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com"
+        --http-method=GET --oidc-service-account-email="classall-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" --oidc-token-audience="$WORKER_URL"
 fi
 
 if gcloud secrets versions list telegram-bot-token --project "$PROJECT_ID" --filter="state=ENABLED" --limit=1 --format="value(name)" | grep -q .; then
@@ -164,9 +179,11 @@ if gcloud secrets versions list telegram-bot-token --project "$PROJECT_ID" --fil
         -d 'allowed_updates=["message","callback_query"]' \
         -d "drop_pending_updates=true" >/dev/null
 
-    curl -s -X POST "https://api.telegram.org/bot${TOKEN}/setMyCommands" \
+    COMMANDS_JSON=$(python3 -m backend.api.bot_commands)
+    COMMANDS_RESPONSE=$(curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TOKEN}/setMyCommands" \
         -H "Content-Type: application/json" \
-        -d '{"commands":[{"command":"start","description":"Welcome & agent overview"},{"command":"newcase","description":"Create new document triage case"},{"command":"submit","description":"Submit case token for verification"},{"command":"help","description":"Show 7-field verification guide"}]}' >/dev/null
+        -d "$COMMANDS_JSON")
+    printf '%s' "$COMMANDS_RESPONSE" | python3 -c 'import json, sys; result = json.load(sys.stdin); sys.exit(0 if result.get("ok") is True else "Telegram command registration failed")'
 
     curl -s -X POST "https://api.telegram.org/bot${TOKEN}/setMyDescription" \
         -H "Content-Type: application/json" \

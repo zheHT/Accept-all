@@ -6,7 +6,7 @@ import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
 import { useTheme, type ThemeChoice } from "@/components/theme/theme-provider";
 import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
-import { getSettings, saveSettings, startGmailOAuth } from "@/lib/api";
+import { getSession, getSettings, saveSettings, startGmailOAuth } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { useLiveQuery } from "@/lib/use-live-query";
 
@@ -20,7 +20,12 @@ const THRESHOLDS = ["75", "80", "85", "90", "95"];
 export function SettingsView() {
   const toast = useToast();
   const { theme, mounted, setTheme } = useTheme();
-  const settings = useLiveQuery((signal) => getSettings(signal), []);
+  const session = useLiveQuery((signal) => getSession(signal), []);
+  const isAdmin = session.data?.is_admin === true;
+  const settings = useLiveQuery(
+    (signal) => (isAdmin ? getSettings(signal) : Promise.resolve(null)),
+    [isAdmin],
+  );
 
   const [threshold, setThreshold] = useState("85");
   const [mismatchAlerts, setMismatchAlerts] = useState(true);
@@ -32,8 +37,12 @@ export function SettingsView() {
     setMismatchAlerts(settings.data.mismatch_alerts_enabled);
   }, [settings.data]);
 
-  if (settings.loading && !settings.data) return <LoadingState label="Loading operational settings" />;
-  if (settings.error && !settings.data) {
+  if (session.loading && !session.data) return <LoadingState label="Loading settings access" />;
+  if (session.error && !session.data) {
+    return <ErrorState message={session.error} retry={() => void session.refresh()} />;
+  }
+  if (isAdmin && settings.loading && !settings.data) return <LoadingState label="Loading operational settings" />;
+  if (isAdmin && settings.error && !settings.data) {
     return <ErrorState message={settings.error} retry={() => void settings.refresh()} />;
   }
 
@@ -59,8 +68,8 @@ export function SettingsView() {
 
   return (
     <div className="flex flex-col gap-5">
-      {settings.stale && <StaleNotice />}
-      <div className="flex justify-end">
+      {isAdmin && settings.stale && <StaleNotice />}
+      {isAdmin && <div className="flex justify-end">
         <button
           type="button"
           onClick={() => {
@@ -75,7 +84,7 @@ export function SettingsView() {
           <RefreshCw className={cn("size-3.5", settings.loading && "animate-spin")} />
           Refresh settings
         </button>
-      </div>
+      </div>}
       <Panel
         icon={Palette}
         title="Appearance"
@@ -127,11 +136,12 @@ export function SettingsView() {
         </div>
       </Panel>
 
-      <Panel
-        icon={ShieldCheck}
-        title="Verification rules"
-        description="How certain the engine must be before it decides a field on its own."
-      >
+      {isAdmin ? <>
+        <Panel
+          icon={ShieldCheck}
+          title="Verification rules"
+          description="How certain the engine must be before it decides a field on its own."
+        >
         <Row
           title="Confidence threshold"
           detail="Below this, a field is sent to Human Review instead of being decided automatically."
@@ -178,13 +188,13 @@ export function SettingsView() {
             onChange={() => {}}
           />
         </Row>
-      </Panel>
+        </Panel>
 
-      <Panel
-        icon={Mail}
-        title="Mailbox connection"
-        description="The inbox ShipVerify watches for shipping documents."
-      >
+        <Panel
+          icon={Mail}
+          title="Mailbox connection"
+          description="The inbox ShipVerify watches for shipping documents."
+        >
         <Row
           title={settings.data?.gmail.address || "Gmail account"}
           detail={`OAuth: ${settings.data?.gmail.oauth_status || "not connected"} · Watch: ${settings.data?.gmail.watch_expiration ? formatDate(settings.data.gmail.watch_expiration) : "not active"}`}
@@ -198,9 +208,9 @@ export function SettingsView() {
             {settings.data?.gmail.oauth_status === "connected" ? "Reconnect" : "Connect Gmail"}
           </button>
         </Row>
-      </Panel>
+        </Panel>
 
-      <Panel icon={Bell} title="Notifications" description="What reaches you, and when.">
+        <Panel icon={Bell} title="Notifications" description="What reaches you, and when.">
         <Row
           title="Mismatch alerts"
           detail="Notify immediately when a discrepancy is found on any shipment."
@@ -215,7 +225,12 @@ export function SettingsView() {
             disabled={saving}
           />
         </Row>
-      </Panel>
+        </Panel>
+      </> : (
+        <section className="glass glass-sheen px-5 py-4 text-[13px] text-ink-500">
+          Operational settings are managed by an administrator.
+        </section>
+      )}
     </div>
   );
 }

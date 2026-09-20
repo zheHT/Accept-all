@@ -19,14 +19,20 @@ import {
 import { getCase, getInbox } from "@/lib/api";
 import { inboxDetail, inboxSummary } from "@/lib/live-view-models";
 import { useLiveQuery } from "@/lib/use-live-query";
+import {
+  filterInboxEmails,
+  OTHER_REQUEST_TYPES,
+  type InboxDateFilter,
+  type InboxSortOrder,
+  type InboxStatusFilter,
+  type InboxTypeFilter,
+} from "./inbox-filter";
 
 /** "other_requests" groups the three non-verification, non-spam categories. */
-type TypeFilter = "all" | EmailClassification | "other_requests";
-type StatusFilter = "all" | EmailStatus;
-type DateFilter = "all" | "today" | "yesterday";
-type SortOrder = "newest" | "oldest" | "confidence";
-
-const OTHER_REQUEST_TYPES: EmailClassification[] = ["new_si", "invoice_query", "general"];
+type TypeFilter = InboxTypeFilter;
+type StatusFilter = InboxStatusFilter;
+type DateFilter = InboxDateFilter;
+type SortOrder = InboxSortOrder;
 
 const TYPE_OPTIONS: Array<{ value: TypeFilter; label: string }> = [
   { value: "all", label: "All Types" },
@@ -70,6 +76,7 @@ export function InboxView() {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [date, setDate] = useState<DateFilter>("all");
   const [sort, setSort] = useState<SortOrder>("newest");
+  const [includeSpam, setIncludeSpam] = useState(false);
   const [selected, setSelected] = useState<InboxEmail | null>(null);
   const [displayLimit, setDisplayLimit] = useState(25);
 
@@ -136,7 +143,7 @@ export function InboxView() {
           ? "other"
           : "all";
 
-  const selectGroup = (next: IntakeGroup) =>
+  const selectGroup = (next: IntakeGroup) => {
     setType(
       next === "checks"
         ? "document_comparison"
@@ -146,9 +153,16 @@ export function InboxView() {
             ? "other_requests"
             : "all",
     );
+    setIncludeSpam(next === "all" || next === "spam");
+  };
+
+  const selectType = (next: TypeFilter) => {
+    setType(next);
+    setIncludeSpam(next === "all" || next === "spam");
+  };
 
   const filtersActive =
-    query.trim() !== "" || type !== "all" || status !== "all" || date !== "all" || sort !== "newest";
+    query.trim() !== "" || type !== "all" || status !== "all" || date !== "all" || sort !== "newest" || includeSpam;
 
   const clearFilters = () => {
     setQuery("");
@@ -156,31 +170,12 @@ export function InboxView() {
     setStatus("all");
     setDate("all");
     setSort("newest");
+    setIncludeSpam(false);
   };
 
   const rows = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-
-    const filtered = emails.filter((email) => {
-      if (type === "other_requests" && !OTHER_REQUEST_TYPES.includes(email.classification)) {
-        return false;
-      }
-      if (type !== "all" && type !== "other_requests" && email.classification !== type) return false;
-      if (status !== "all" && email.status !== status) return false;
-      if (date !== "all" && email.receivedDay !== date) return false;
-      if (!needle) return true;
-      return [email.sender, email.senderEmail, email.subject, email.preview, email.shipment ?? ""]
-        .join(" ")
-        .toLowerCase()
-        .includes(needle);
-    });
-
-    return filtered.sort((a, b) => {
-      if (sort === "confidence") return a.confidence - b.confidence;
-      if (sort === "oldest") return a.receivedOrder - b.receivedOrder;
-      return b.receivedOrder - a.receivedOrder;
-    });
-  }, [emails, query, type, status, date, sort]);
+    return filterInboxEmails(emails, { query, type, status, date, sort, includeSpam });
+  }, [emails, query, type, status, date, sort, includeSpam]);
 
   const visibleRows = useMemo(() => rows.slice(0, displayLimit), [rows, displayLimit]);
 
@@ -223,7 +218,7 @@ export function InboxView() {
               label="Classification filter"
               value={type}
               options={TYPE_OPTIONS}
-              onChange={setType}
+              onChange={selectType}
             />
             <FilterSelect
               label="Status filter"

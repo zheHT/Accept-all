@@ -130,6 +130,10 @@ export interface DashboardResponse {
   attention_items: CaseSummary[];
   recent_items: CaseSummary[];
 }
+export interface SessionInfo {
+  uid: string;
+  is_admin: boolean;
+}
 export interface PlatformSettings {
   confidence_threshold: number;
   mismatch_alerts_enabled: boolean;
@@ -168,6 +172,7 @@ export const getDashboard = (period: DashboardResponse["period"], signal?: Abort
 export const getInbox = (signal?: AbortSignal, limit = 50) => apiFetch<PagedResponse<CaseSummary>>(`/api/inbox?limit=${limit}`, { signal });
 export const getCases = (signal?: AbortSignal, limit = 50) => apiFetch<PagedResponse<CaseSummary>>(`/api/cases?limit=${limit}`, { signal });
 export const getReviews = (signal?: AbortSignal, limit = 50) => apiFetch<PagedResponse<CaseSummary>>(`/api/reviews?limit=${limit}`, { signal });
+export const getSession = (signal?: AbortSignal) => apiFetch<SessionInfo>("/api/session", { signal });
 export const getCase = (id: string, signal?: AbortSignal) => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(id)}`, { signal });
 export const getDocumentDownload = (caseId: string, documentId: string) =>
   apiFetch<{ url: string }>(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}/download`);

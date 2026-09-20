@@ -7,6 +7,7 @@ import secrets
 import time
 from contextlib import suppress
 from io import BytesIO
+from datetime import date
 from typing import Annotated, Any
 from urllib.parse import quote
 
@@ -46,11 +47,13 @@ from backend.core.schemas import (
 from backend.core.security import content_hash, sign_state, verify_state
 from backend.core.telegram import TELEGRAM_HELP_TEXT, TELEGRAM_WELCOME_TEXT
 from backend.core.workflows import create_case_draft
+from backend.integrations.knowledge import secure_knowledge_publisher
 
 
 def create_app(runtime: Runtime | None = None) -> FastAPI:
     settings = runtime.settings if runtime else get_settings()
     runtime = runtime or build_runtime(settings)
+    secure_knowledge_publisher(runtime)
     app = FastAPI(title="ClassAll API", version="0.1.0")
     origins = [
         settings.dashboard_base_url.rstrip("/"),
@@ -86,11 +89,11 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         if not x_ingest_key or not hmac.compare_digest(x_ingest_key, expected):
             raise HTTPException(401, "invalid ingestion key")
 
-    def require_reviewer(
+    def require_user(
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, Any]:
         if not settings.dashboard_auth_required:
-            return {"uid": "local-reviewer", "email": "local@example.test"}
+            return {"uid": "local-reviewer", "email": "local@example.test", "admin": True}
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(401, "Firebase bearer token required")
         try:
@@ -102,15 +105,19 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(401, "invalid Firebase token") from exc
         uid = str(claims.get("user_id") or claims.get("sub") or claims.get("uid") or "")
-        email = str(claims.get("email") or "")
+        if not uid:
+            raise HTTPException(401, "Firebase user identity required")
         claims["uid"] = uid
-        is_authorized = (
-            (uid and runtime.repository.is_reviewer(uid))
-            or (email and runtime.repository.is_reviewer(email))
-        )
-        if not is_authorized:
-            raise HTTPException(403, f"reviewer access required for {email or uid}")
         return claims
+
+    def require_admin(claims: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+        if claims.get("admin") is not True:
+            raise HTTPException(403, "administrator access required")
+        return claims
+
+    @app.get("/api/session")
+    def session(claims: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+        return {"uid": claims["uid"], "is_admin": claims.get("admin") is True}
 
     def get_case_or_404(case_id: str) -> dict[str, Any]:
         case = runtime.repository.get_case(case_id)
@@ -192,11 +199,11 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             "next_cursor": next_cursor,
         }
 
-    @app.get("/api/dashboard", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/dashboard", dependencies=[Depends(require_user)])
     def dashboard(period: str = Query(default="week", pattern="^(day|week|month)$")) -> dict[str, Any]:
         return dashboard_view(get_cached_cases(), period)
 
-    @app.get("/api/inbox", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/inbox", dependencies=[Depends(require_user)])
     def inbox(
         limit: int = Query(default=50, ge=1, le=200), cursor: str | None = None
     ) -> dict[str, Any]:
@@ -207,7 +214,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         ]
         return paged_cases(cases, limit, cursor)
 
-    @app.get("/api/reviews", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/reviews", dependencies=[Depends(require_user)])
     def reviews(
         limit: int = Query(default=50, ge=1, le=200), cursor: str | None = None
     ) -> dict[str, Any]:
@@ -219,7 +226,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         ]
         return paged_cases(cases, limit, cursor)
 
-    @app.get("/api/cases", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/cases", dependencies=[Depends(require_user)])
     def list_cases(
         status: str | None = None,
         limit: int = Query(default=50, ge=1, le=200),
@@ -235,12 +242,12 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             cases = get_cached_cases()
         return paged_cases(cases, limit, cursor)
 
-    @app.get("/api/cases/{case_id}", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/cases/{case_id}", dependencies=[Depends(require_user)])
     def get_case(case_id: str) -> dict[str, Any]:
         case = get_case_or_404(case_id)
         return build_case_detail(case, runtime.repository.list_documents(case_id))
 
-    @app.post("/api/cases/{case_id}/retry", dependencies=[Depends(require_reviewer)])
+    @app.post("/api/cases/{case_id}/retry", dependencies=[Depends(require_user)])
     def retry_case(case_id: str, expected_version: int | None = None) -> dict[str, Any]:
         get_case_or_404(case_id)
         try:
@@ -264,7 +271,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
     @app.get(
         "/api/cases/{case_id}/documents/{document_id}/download",
-        dependencies=[Depends(require_reviewer)],
+        dependencies=[Depends(require_user)],
     )
     def document_download(case_id: str, document_id: str) -> dict[str, str]:
         document = next(
@@ -281,7 +288,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
     @app.get(
         "/api/cases/{case_id}/documents/{document_id}/content",
-        dependencies=[Depends(require_reviewer)],
+        dependencies=[Depends(require_user)],
     )
     def document_content(case_id: str, document_id: str) -> Response:
         get_case_or_404(case_id)
@@ -347,7 +354,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         invalidate_cached_cases()
         return build_case_detail(updated, documents)
 
-    @app.post("/api/cases/{case_id}/review", dependencies=[Depends(require_reviewer)])
+    @app.post("/api/cases/{case_id}/review", dependencies=[Depends(require_user)])
     def review(case_id: str, request: ReviewRequest) -> dict[str, Any]:
         case = get_case_or_404(case_id)
         if request.decision == ReviewDecision.APPROVE and case.get("field_reviews"):
@@ -379,7 +386,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         invalidate_cached_cases()
         return updated
 
-    @app.post("/api/cases/{case_id}/explain", dependencies=[Depends(require_reviewer)])
+    @app.post("/api/cases/{case_id}/explain", dependencies=[Depends(require_user)])
     def explain(case_id: str, request: ExplainRequest) -> dict[str, str]:
         case = get_case_or_404(case_id)
         answer = runtime.explainer.explain(case, request.question)
@@ -388,7 +395,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         )
         return {"answer": answer}
 
-    @app.put("/api/cases/{case_id}/draft", dependencies=[Depends(require_reviewer)])
+    @app.put("/api/cases/{case_id}/draft", dependencies=[Depends(require_user)])
     def update_draft(case_id: str, request: DraftUpdateRequest) -> dict[str, Any]:
         case = get_case_or_404(case_id)
         if not case.get("gmail_draft_id"):
@@ -415,7 +422,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         except Conflict as exc:
             raise HTTPException(409, "draft changed; refresh before editing") from exc
 
-    @app.post("/api/cases/{case_id}/draft/send", dependencies=[Depends(require_reviewer)])
+    @app.post("/api/cases/{case_id}/draft/send", dependencies=[Depends(require_user)])
     def send_draft(case_id: str, request: DraftSendRequest) -> dict[str, Any]:
         case = get_case_or_404(case_id)
         if case.get("version") != request.expected_version:
@@ -450,31 +457,31 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             },
         }
 
-    @app.get("/api/settings", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/settings", dependencies=[Depends(require_admin)])
     def get_platform_settings() -> dict[str, Any]:
         return settings_view()
 
-    @app.put("/api/settings", dependencies=[Depends(require_reviewer)])
+    @app.put("/api/settings", dependencies=[Depends(require_admin)])
     def update_platform_settings(request: PlatformSettingsUpdate) -> dict[str, Any]:
         runtime.repository.set_platform_settings(request.model_dump())
         return settings_view()
 
-    @app.get("/api/knowledge-base/weeks", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/knowledge-base/weeks", dependencies=[Depends(require_user)])
     def list_knowledge_base_weeks() -> list[dict[str, Any]]:
         return runtime.repository.list_knowledge_base_weeks()
 
-    @app.get("/api/knowledge-base/weeks/{iso_week}", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/knowledge-base/weeks/{iso_week}", dependencies=[Depends(require_user)])
     def get_knowledge_base_week(iso_week: str) -> dict[str, Any]:
         week = runtime.repository.get_knowledge_base_week(iso_week)
         if not week:
             raise HTTPException(404, f"Weekly knowledge base for {iso_week} not found")
         return week
 
-    @app.get("/api/knowledge-base/registry", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/knowledge-base/registry", dependencies=[Depends(require_user)])
     def list_assumptions(status: str | None = None) -> list[dict[str, Any]]:
         return runtime.repository.list_assumptions(status=status)
 
-    @app.post("/api/knowledge-base/publish", dependencies=[Depends(require_reviewer)])
+    @app.post("/api/knowledge-base/publish", dependencies=[Depends(require_user)])
     def publish_knowledge_base(week: str | None = None) -> dict[str, Any]:
         if not week:
             from datetime import UTC, datetime
@@ -485,7 +492,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
     @app.get(
         "/api/knowledge-base/preview/{filename}",
-        dependencies=[Depends(require_reviewer)],
+        dependencies=[Depends(require_user)],
     )
     def preview_knowledge_base(filename: str) -> HTMLResponse:
         clean_name = re.sub(r"[^a-zA-Z0-9_\-]", "", filename)
@@ -512,7 +519,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             },
         )
 
-    @app.get("/api/integrations/gmail/oauth/start", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/integrations/gmail/oauth/start", dependencies=[Depends(require_admin)])
     def gmail_oauth_start() -> dict[str, str]:
         state = sign_state(
             {"exp": int(time.time()) + 600, "nonce": secrets.token_urlsafe(16)},
@@ -568,19 +575,38 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
         return
     chat_id = str(message["chat"]["id"])
     text = (message.get("text") or message.get("caption") or "").strip()
+    command = text.split(maxsplit=1)[0].split("@", 1)[0].lower() if text else ""
     if text.startswith("/start"):
         runtime.telegram.send_message(chat_id, TELEGRAM_WELCOME_TEXT)
         return
     if text.startswith("/help"):
-        runtime.telegram.send_message(chat_id, TELEGRAM_HELP_TEXT)
+        runtime.telegram.send_message(
+            chat_id,
+            TELEGRAM_HELP_TEXT.replace("/email-limit", "/email_limit")
+            .replace("Show alert and hourly email settings", "Show alert and hourly email settings (admin)")
+            .replace("Read a published weekly summary", "Open reports on the signed-in website"),
+        )
         return
-    if text.startswith("/notifications"):
-        parts = text.split(maxsplit=1)
-        if len(parts) == 2 and parts[1].strip().lower() in {"on", "off"}:
-            if chat_id != str(runtime.settings.telegram_admin_chat_id):
+    if command in {"/notifications", "/email_limit", "/email-limit", "/week"}:
+        configured_admin = str(runtime.settings.telegram_admin_chat_id or "")
+        private_chat = message["chat"].get("type", "private") == "private"
+        sender_id = str(message.get("from", {}).get("id", chat_id))
+        if not configured_admin or not private_chat or chat_id != configured_admin or sender_id != chat_id:
+            if command == "/week":
+                url = runtime.settings.dashboard_base_url.rstrip("/") + "/knowledge-base"
                 runtime.telegram.send_message(
-                    chat_id, "Only the configured Telegram admin can change notifications."
+                    chat_id,
+                    "Weekly reports are available to everyone after signing into the website.",
+                    reply_markup={"inline_keyboard": [[{"text": "SIGN IN TO READ REPORTS", "url": url}]]},
                 )
+            else:
+                runtime.telegram.send_message(chat_id, "Operational settings are managed by an administrator. You can still use all public bot features.")
+            return
+    if command == "/notifications":
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2:
+            if parts[1].lower() not in {"on", "off"}:
+                runtime.telegram.send_message(chat_id, "Usage: <code>/notifications [on|off]</code>")
                 return
             runtime.repository.set_platform_settings(
                 {"mismatch_alerts_enabled": parts[1].strip().lower() == "on"}
@@ -595,38 +621,36 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
             f"Hourly reconciliation: <code>{html.escape(runtime.settings.gmail_reconcile_schedule)}</code>",
         )
         return
-    if text.startswith("/email-limit"):
-        if chat_id != str(runtime.settings.telegram_admin_chat_id):
-            runtime.telegram.send_message(
-                chat_id, "Only the configured Telegram admin can change the email limit."
-            )
-            return
+    if command in {"/email_limit", "/email-limit"}:
         parts = text.split(maxsplit=1)
         try:
             limit = int(parts[1]) if len(parts) == 2 else 0
         except ValueError:
             limit = 0
         if not 1 <= limit <= 500:
-            runtime.telegram.send_message(chat_id, "Usage: <code>/email-limit 1..500</code>")
+            runtime.telegram.send_message(chat_id, "Usage: <code>/email_limit 1..500</code>")
             return
         runtime.repository.set_platform_settings({"gmail_reconcile_limit": limit})
         runtime.telegram.send_message(chat_id, f"Hourly email limit: <b>{limit}</b>.")
         return
-    if text.startswith("/week"):
+    if command == "/week":
         parts = text.split(maxsplit=1)
         week = parts[1].strip() if len(parts) == 2 else ""
+        try:
+            if not re.fullmatch(r"\d{4}-W\d{2}", week):
+                raise ValueError("invalid ISO week")
+            date.fromisocalendar(int(week[:4]), int(week[-2:]), 1)
+        except ValueError:
+            runtime.telegram.send_message(chat_id, "Usage: <code>/week YYYY-W##</code>")
+            return
         record = runtime.repository.get_knowledge_base_week(week)
         if not record:
             runtime.telegram.send_message(
                 chat_id, "Usage: <code>/week YYYY-W##</code> or summary not found."
             )
             return
-        drive_url = record.get("drive_url")
-        markup = (
-            {"inline_keyboard": [[{"text": "OPEN WEEKLY SUMMARY", "url": drive_url}]]}
-            if isinstance(drive_url, str) and drive_url.startswith(("http://", "https://"))
-            else None
-        )
+        report_url = runtime.settings.dashboard_base_url.rstrip("/") + "/knowledge-base"
+        markup = {"inline_keyboard": [[{"text": "OPEN WEEKLY SUMMARY", "url": report_url}]]}
         runtime.telegram.send_message(
             chat_id,
             f"<b>Weekly summary {html.escape(week)}</b>\n\n"
