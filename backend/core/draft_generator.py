@@ -143,3 +143,79 @@ def generate_correction_draft(
 
     subject, body = deterministic_correction_draft(case, fields, comparisons)
     return subject, body, "template"
+
+
+def generate_si_return_draft(
+    case: dict[str, Any],
+    si_filename: str = "Shipping_Instruction.txt",
+) -> tuple[str, str]:
+    """Generate a polite email returning the generated and approved SI document."""
+    original_subject = case.get("subject") or "Shipping Instruction Request"
+    subject = (
+        original_subject
+        if original_subject.lower().startswith("re:")
+        else f"Re: {original_subject}"
+    )
+    body = (
+        "Dear Shipping Partner,\n\n"
+        "Thank you for your inquiry. Please find attached the verified and approved "
+        f"Shipping Instruction document ({si_filename}) prepared for your consignment.\n\n"
+        "Please review the attached details and notify us immediately if any corrections "
+        "or amendments are required prior to final vessel cutoff.\n\n"
+        "Best regards,\n"
+        "Documentation Verification Team\n"
+        "ClassAll Platform"
+    )
+    return subject, body
+
+
+def generate_invoice_response_draft(
+    case: dict[str, Any],
+    custom_instructions: str = "",
+) -> tuple[str, str]:
+    """Generate a response acknowledging and routing an invoice query to Finance."""
+    original_subject = case.get("subject") or "Invoice Query"
+    subject = (
+        original_subject
+        if original_subject.lower().startswith("re:")
+        else f"Re: {original_subject}"
+    )
+    extra_text = f"\n\nNote: {custom_instructions}" if custom_instructions else ""
+    body = (
+        "Dear Customer,\n\n"
+        "Thank you for contacting us regarding your invoice inquiry.\n\n"
+        "Your request has been routed to our Finance & Accounts Department for expedited "
+        "review. Our accounts specialist is currently verifying the charges against the agreed "
+        "tariff schedule and will provide a full breakdown within 1 business day."
+        f"{extra_text}\n\n"
+        "Thank you for your patience.\n\n"
+        "Best regards,\n"
+        "Finance & Accounts Team\n"
+        "ClassAll Platform"
+    )
+    return subject, body
+
+
+def generate_general_response_draft(
+    case: dict[str, Any],
+    custom_instructions: str = "",
+) -> tuple[str, str]:
+    """Generate a response acknowledging and handling a general correspondence inquiry."""
+    original_subject = case.get("subject") or "General Inquiry"
+    subject = (
+        original_subject
+        if original_subject.lower().startswith("re:")
+        else f"Re: {original_subject}"
+    )
+    extra_text = f"\n\nNote: {custom_instructions}" if custom_instructions else ""
+    body = (
+        "Dear Customer,\n\n"
+        "Thank you for reaching out to us.\n\n"
+        "We have received your message and forwarded it to our Customer Service team. "
+        "A representative will review the details and get back to you shortly."
+        f"{extra_text}\n\n"
+        "Best regards,\n"
+        "Customer Service Team\n"
+        "ClassAll Platform"
+    )
+    return subject, body

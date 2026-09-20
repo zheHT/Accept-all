@@ -53,6 +53,9 @@ class FakeNotifier:
     def send_review_alert(self, case):
         self.cases.append(case)
 
+    def send_spam_alert(self, case):
+        self.cases.append(case)
+
 
 class FakeGmail(GmailClient):
     def __init__(self) -> None:

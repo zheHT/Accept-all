@@ -32,21 +32,42 @@ from backend.api.views import (
     dashboard_view,
     paginate,
 )
+from backend.core.category_workflows import (
+    approve_si,
+    block_sender_workflow,
+    complete_category_case,
+    draft_category_response,
+    generate_si_artifact,
+    mark_not_spam_workflow,
+    return_si_to_requester,
+    route_case,
+    unblock_sender_workflow,
+    verify_si,
+)
 from backend.core.config import get_settings
 from backend.core.ingestion import stable_case_id
 from backend.core.repository import utcnow
 from backend.core.runtime import Runtime, build_runtime
 from backend.core.schemas import (
+    BlockSenderRequest,
+    CategoryCompleteRequest,
+    CategoryDraftRequest,
     DraftSendRequest,
     DraftUpdateRequest,
+    EmailCategory,
     ExplainRequest,
     FieldReviewRequest,
     IngestionState,
     IngestMetadata,
+    NotSpamRequest,
     PlatformSettingsUpdate,
     ProcessingState,
     ReviewDecision,
     ReviewRequest,
+    SIApproveRequest,
+    SIReturnRequest,
+    SIRouteRequest,
+    SIVerifyRequest,
 )
 from backend.core.security import content_hash, sign_state, verify_state
 from backend.core.telegram import TELEGRAM_HELP_TEXT, TELEGRAM_WELCOME_TEXT
@@ -313,39 +334,6 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         try:
             data = runtime.blobs.download(document["gcs_uri"])
         except (FileNotFoundError, NotFound, KeyError, ValueError) as exc:
-            raw_text = document.get("raw_text") or (document.get("extraction") or {}).get("raw_text")
-            if not raw_text:
-                ext_fields = (document.get("extraction") or {}).get("fields") or {}
-                if ext_fields:
-                    lines = [
-                        f"Document: {document.get('filename')}",
-                        f"Type: {(document.get('extraction') or {}).get('document_type', 'DOCUMENT')}",
-                        "",
-                        "--- PARSED TEXT LINES ---",
-                    ]
-                    for f_name, f_val in ext_fields.items():
-                        if isinstance(f_val, dict):
-                            val_str = f_val.get("value")
-                            unit = f_val.get("unit")
-                            if unit and val_str:
-                                val_str = f"{val_str} {unit}"
-                            lines.append(f"{f_name.upper()}: {val_str or 'N/A'}")
-                        else:
-                            lines.append(f"{f_name.upper()}: {f_val}")
-                    raw_text = "\n".join(lines)
-            if raw_text:
-                filename = quote(str(document.get("filename") or "document.txt"), safe="")
-                return Response(
-                    content=raw_text.encode("utf-8"),
-                    media_type="text/plain; charset=utf-8",
-                    headers={
-                        "Content-Disposition": f"inline; filename*=UTF-8''{filename}",
-                        "Cache-Control": "private, no-store",
-                        "X-Content-Type-Options": "nosniff",
-                        "X-Document-Page-Count": "1",
-                        "X-Document-Fallback": "extracted-text",
-                    },
-                )
             raise HTTPException(404, "original document is unavailable") from exc
         except GoogleAPIError as exc:
             raise HTTPException(503, "document storage is temporarily unavailable") from exc
@@ -636,6 +624,212 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         invalidate_cached_cases()
         documents = runtime.repository.list_documents(case_id)
         return build_case_detail(updated, documents)
+
+    @app.post("/api/cases/{case_id}/actions/si/generate", dependencies=[Depends(require_user)])
+    def api_generate_si(
+        case_id: str,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
+        get_case_or_404(case_id)
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        try:
+            updated = generate_si_artifact(runtime, case_id, reviewer=reviewer_id)
+            invalidate_cached_cases()
+            documents = runtime.repository.list_documents(case_id)
+            return build_case_detail(updated, documents)
+        except Conflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/actions/si/verify", dependencies=[Depends(require_user)])
+    def api_verify_si(
+        case_id: str,
+        request: SIVerifyRequest,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
+        get_case_or_404(case_id)
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        try:
+            updated = verify_si(
+                runtime,
+                case_id,
+                fields=request.fields or None,
+                reviewer=reviewer_id,
+                note=request.note,
+                expected_version=request.expected_version,
+            )
+            invalidate_cached_cases()
+            documents = runtime.repository.list_documents(case_id)
+            return build_case_detail(updated, documents)
+        except Conflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/actions/si/approve", dependencies=[Depends(require_user)])
+    def api_approve_si(
+        case_id: str,
+        request: SIApproveRequest,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
+        get_case_or_404(case_id)
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        try:
+            updated = approve_si(
+                runtime,
+                case_id,
+                reviewer=reviewer_id,
+                note=request.note,
+                expected_version=request.expected_version,
+            )
+            invalidate_cached_cases()
+            documents = runtime.repository.list_documents(case_id)
+            return build_case_detail(updated, documents)
+        except Conflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/actions/si/return", dependencies=[Depends(require_user)])
+    def api_return_si(
+        case_id: str,
+        request: SIReturnRequest,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
+        get_case_or_404(case_id)
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        try:
+            updated = return_si_to_requester(
+                runtime,
+                case_id,
+                reviewer=reviewer_id,
+                expected_version=request.expected_version,
+            )
+            invalidate_cached_cases()
+            documents = runtime.repository.list_documents(case_id)
+            return build_case_detail(updated, documents)
+        except Conflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/actions/route", dependencies=[Depends(require_user)])
+    def api_route_case(
+        case_id: str,
+        request: SIRouteRequest,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
+        get_case_or_404(case_id)
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        try:
+            updated = route_case(
+                runtime,
+                case_id,
+                team=request.team,
+                reviewer=reviewer_id,
+                expected_version=request.expected_version,
+            )
+            invalidate_cached_cases()
+            documents = runtime.repository.list_documents(case_id)
+            return build_case_detail(updated, documents)
+        except Conflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/actions/draft-response", dependencies=[Depends(require_user)])
+    def api_draft_category_response(
+        case_id: str,
+        request: CategoryDraftRequest,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
+        get_case_or_404(case_id)
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        try:
+            updated = draft_category_response(
+                runtime,
+                case_id,
+                custom_instructions=request.custom_instructions,
+                reviewer=reviewer_id,
+                expected_version=request.expected_version,
+            )
+            invalidate_cached_cases()
+            documents = runtime.repository.list_documents(case_id)
+            return build_case_detail(updated, documents)
+        except Conflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/actions/complete", dependencies=[Depends(require_user)])
+    def api_complete_category_case(
+        case_id: str,
+        request: CategoryCompleteRequest,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
+        get_case_or_404(case_id)
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        try:
+            updated = complete_category_case(
+                runtime,
+                case_id,
+                reviewer=reviewer_id,
+                note=request.note,
+                expected_version=request.expected_version,
+            )
+            invalidate_cached_cases()
+            documents = runtime.repository.list_documents(case_id)
+            return build_case_detail(updated, documents)
+        except Conflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/actions/block-sender", dependencies=[Depends(require_user)])
+    def api_block_sender(
+        case_id: str,
+        request: BlockSenderRequest,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
+        case = get_case_or_404(case_id)
+        sender = request.sender or case.get("sender")
+        if not sender:
+            raise HTTPException(400, "Sender email address is missing")
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        try:
+            updated = block_sender_workflow(
+                runtime,
+                case_id=case_id,
+                sender=sender,
+                reviewer=reviewer_id,
+                reason=request.reason,
+                expected_version=request.expected_version,
+            )
+            invalidate_cached_cases()
+            documents = runtime.repository.list_documents(case_id)
+            return build_case_detail(updated, documents)
+        except Conflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/actions/not-spam", dependencies=[Depends(require_user)])
+    def api_mark_not_spam(
+        case_id: str,
+        request: NotSpamRequest,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
+        get_case_or_404(case_id)
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        try:
+            updated = mark_not_spam_workflow(
+                runtime,
+                case_id=case_id,
+                reviewer=reviewer_id,
+                reclassify_as=request.reclassify_as,
+                expected_version=request.expected_version,
+            )
+            invalidate_cached_cases()
+            documents = runtime.repository.list_documents(case_id)
+            return build_case_detail(updated, documents)
+        except Conflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/blocked-senders", dependencies=[Depends(require_user)])
+    def api_list_blocked_senders() -> list[dict[str, Any]]:
+        return runtime.repository.list_blocked_senders()
+
+    @app.delete("/api/blocked-senders/{sender:path}", dependencies=[Depends(require_user)])
+    def api_unblock_sender(sender: str) -> dict[str, bool]:
+        unblocked = unblock_sender_workflow(runtime, sender)
+        return {"unblocked": unblocked}
 
     def settings_view() -> dict[str, Any]:
         policy = runtime.repository.get_platform_settings()
@@ -1075,6 +1269,8 @@ def _handle_callback(runtime: Runtime, callback: dict[str, Any]) -> None:
         "decline": "decline",
         "send": "send_draft",
         "confirm_sent": "confirm_sent",
+        "block": "block",
+        "not_spam": "not_spam",
     }
     expected_action_type = expected_actions.get(action_name)
     if not expected_action_type:
@@ -1203,6 +1399,29 @@ def _handle_callback(runtime: Runtime, callback: dict[str, Any]) -> None:
             )
             _invalidate_cached_cases(runtime)
             runtime.telegram.answer_callback(callback_id, "Sent confirmed")
+        elif action_name == "block":
+            sender = case.get("sender", "")
+            if sender:
+                block_sender_workflow(
+                    runtime,
+                    case_id=case["case_id"],
+                    sender=sender,
+                    reviewer=f"telegram:{chat_id}",
+                    reason="Flagged and blocked via Telegram spam alert",
+                    expected_version=action.get("expected_version"),
+                )
+            _invalidate_cached_cases(runtime)
+            runtime.telegram.answer_callback(callback_id, "Sender blocked")
+        elif action_name == "not_spam":
+            mark_not_spam_workflow(
+                runtime,
+                case_id=case["case_id"],
+                reviewer=f"telegram:{chat_id}",
+                reclassify_as=EmailCategory.GENERAL,
+                expected_version=action.get("expected_version"),
+            )
+            _invalidate_cached_cases(runtime)
+            runtime.telegram.answer_callback(callback_id, "Marked as not spam")
     except (Conflict, ValueError, RuntimeError):
         runtime.telegram.answer_callback(callback_id, "Case changed; refresh and try again")
 

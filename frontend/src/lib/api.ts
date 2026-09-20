@@ -63,12 +63,52 @@ export function formatApiErrorMessage(error: unknown, fallback = "Please retry."
 }
 
 export type CaseStatus = "OK" | "MISMATCH" | "NEEDS_REVIEW" | null;
+
+export interface SIArtifactMetadata {
+  document_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+  storage_path: string;
+  generated_at: string;
+  generated_by: string;
+  fields: Record<string, string>;
+}
+
+export interface CategoryWorkflowHistoryItem {
+  action: string;
+  at: string;
+  by: string;
+  details?: Record<string, unknown>;
+}
+
+export interface CategoryWorkflowState {
+  category: string;
+  stage: string;
+  assigned_team?: string | null;
+  si_verified?: boolean;
+  si_approved?: boolean;
+  si_returned?: boolean;
+  history?: CategoryWorkflowHistoryItem[];
+}
+
+export interface BlockedSender {
+  email: string;
+  domain?: string | null;
+  blocked_at: string;
+  reason: string;
+  blocked_by: string;
+}
+
 export interface CaseSummary {
   case_id: string;
   source_type: string;
   source_message_id: string;
   sender: string;
   subject: string;
+  body?: string;
+  html_body?: string | null;
   received_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -85,6 +125,10 @@ export interface CaseSummary {
   draft_state?: string | null;
   unresolved_fields?: string[];
   review_progress?: { total: number; completed: number };
+  workflow_state?: CategoryWorkflowState | null;
+  available_actions?: string[];
+  is_sender_blocked?: boolean;
+  assigned_team?: string | null;
 }
 export interface PublicDocument {
   document_id: string;
@@ -119,6 +163,7 @@ export interface CaseDetail extends CaseSummary {
   comparisons: FieldComparison[];
   field_reviews?: Record<string, FieldReview>;
   review_history?: FieldReview[];
+  si_artifact?: SIArtifactMetadata | null;
   draft: {
     state: string;
     subject: string;
@@ -153,7 +198,17 @@ export interface DashboardResponse {
   period: "day" | "week" | "month";
   timezone: string;
   generated_at: string;
-  metrics: { total: number; matches: number; mismatches: number; needs_review: number; processing: number; unresolved: number };
+  metrics: {
+    total: number;
+    matches: number;
+    mismatches: number;
+    needs_review: number;
+    processing: number;
+    unresolved: number;
+    delta_pct?: number;
+    previous_total?: number;
+    avg_turnaround?: string;
+  };
   attention_items: CaseSummary[];
   recent_items: CaseSummary[];
 }
@@ -290,3 +345,63 @@ export const fetchKnowledgeBaseWeeks = (signal?: AbortSignal) => apiFetch<Knowle
 export const fetchAssumptionRegistry = (signal?: AbortSignal) => apiFetch<AssumptionRecord[]>("/api/knowledge-base/registry", { signal });
 export const publishWeeklySnapshot = (week?: string) => apiFetch<KnowledgeBaseWeek>(`/api/knowledge-base/publish${week ? `?week=${encodeURIComponent(week)}` : ""}`, { method: "POST" });
 export const fetchKnowledgePreview = (filename: string) => apiFetch<string>(`/api/knowledge-base/preview/${encodeURIComponent(filename)}`);
+
+export const generateSI = (caseId: string, expectedVersion?: number, fields?: Record<string, unknown>) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/actions/generate-si`, {
+    method: "POST",
+    body: JSON.stringify({ expected_version: expectedVersion, fields }),
+  });
+
+export const verifySI = (caseId: string, expectedVersion?: number) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/actions/verify-si`, {
+    method: "POST",
+    body: JSON.stringify({ expected_version: expectedVersion }),
+  });
+
+export const approveSI = (caseId: string, expectedVersion?: number) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/actions/approve-si`, {
+    method: "POST",
+    body: JSON.stringify({ expected_version: expectedVersion }),
+  });
+
+export const returnSI = (caseId: string, expectedVersion?: number, subject?: string, body?: string) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/actions/return-si`, {
+    method: "POST",
+    body: JSON.stringify({ expected_version: expectedVersion, subject, body }),
+  });
+
+export const routeCase = (caseId: string, team: string, expectedVersion?: number) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/actions/route`, {
+    method: "POST",
+    body: JSON.stringify({ team, expected_version: expectedVersion }),
+  });
+
+export const draftCategoryResponse = (caseId: string, responseText: string, expectedVersion?: number) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/actions/draft-response`, {
+    method: "POST",
+    body: JSON.stringify({ response_text: responseText, expected_version: expectedVersion }),
+  });
+
+export const completeCategoryCase = (caseId: string, expectedVersion?: number, resolutionNote?: string) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/actions/complete`, {
+    method: "POST",
+    body: JSON.stringify({ expected_version: expectedVersion, resolution_note: resolutionNote }),
+  });
+
+export const blockSender = (caseId: string, expectedVersion?: number, reason?: string) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/actions/block-sender`, {
+    method: "POST",
+    body: JSON.stringify({ expected_version: expectedVersion, reason }),
+  });
+
+export const markNotSpam = (caseId: string, expectedVersion?: number, reclassifyAs?: string) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/actions/not-spam`, {
+    method: "POST",
+    body: JSON.stringify({ expected_version: expectedVersion, reclassify_as: reclassifyAs }),
+  });
+
+export const getBlockedSenders = (signal?: AbortSignal) =>
+  apiFetch<BlockedSender[]>("/api/blocked-senders", { signal });
+
+export const unblockSender = (email: string) =>
+  apiFetch<void>(`/api/blocked-senders/${encodeURIComponent(email)}`, { method: "DELETE" });

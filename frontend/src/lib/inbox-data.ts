@@ -10,6 +10,7 @@ import {
   UserRoundSearch,
   type LucideIcon,
 } from "lucide-react";
+import type { CategoryWorkflowState, SIArtifactMetadata } from "./api";
 
 export type EmailClassification =
   | "document_comparison"
@@ -153,6 +154,12 @@ export interface InboxEmail {
   attachments: MailAttachment[];
   caseRef?: string;
   shipment?: string;
+  version?: number;
+  workflowState?: CategoryWorkflowState | null;
+  availableActions?: string[];
+  isSenderBlocked?: boolean;
+  assignedTeam?: string | null;
+  siArtifact?: SIArtifactMetadata | null;
 }
 
 export interface IntakeTotals {

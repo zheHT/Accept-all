@@ -28,9 +28,9 @@ def fake_gemini_client():
 
     sdk_client = MagicMock()
     sdk_client.models.generate_content.side_effect = generate_content
-    with patch("backend.agents.classifier_flow.genai.Client", return_value=sdk_client), patch.dict(
-        os.environ, {"GEMINI_API_KEY": "test-key"}
-    ):
+    with patch(
+        "backend.evaluation_adapter.classifier_flow.genai.Client", return_value=sdk_client
+    ), patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
         yield sdk_client
 
 

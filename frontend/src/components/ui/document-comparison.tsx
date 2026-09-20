@@ -275,7 +275,11 @@ function DocumentPane({
 
   const download = async () => {
     setDownloadError(null);
-    if (position.mode === "original" && evidence.documentId && evidence.caseId) {
+    if (position.mode === "original") {
+      if (!evidence.documentId || !evidence.caseId) {
+        setDownloadError("The original file is not available for download.");
+        return;
+      }
       try {
         const { blob } = await getDocumentContent(evidence.caseId, evidence.documentId);
         const url = URL.createObjectURL(blob);
@@ -286,11 +290,14 @@ function DocumentPane({
         link.click();
         link.remove();
         URL.revokeObjectURL(url);
-        return;
-      } catch {
-        // Fallback to downloading parsed text if storage binary is unavailable
+      } catch (error) {
+        setDownloadError(
+          error instanceof Error ? error.message : "The original file could not be downloaded."
+        );
       }
+      return;
     }
+
     const blob = new Blob([lines.join("\r\n")], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -344,10 +351,23 @@ function DocumentPane({
         <button
           type="button"
           onClick={() => void download()}
-          className="btn-glass shrink-0 px-2.5 py-1 text-[11px]"
-          aria-label={`Download ${evidence.name}`}
+          disabled={position.mode === "original" && Boolean(sourceError)}
+          className={cn(
+            "btn-glass shrink-0 px-2.5 py-1 text-[11px]",
+            position.mode === "original" && sourceError && "cursor-not-allowed opacity-50"
+          )}
+          aria-label={
+            position.mode === "text"
+              ? `Download extracted text for ${evidence.name}`
+              : `Download original ${evidence.name}`
+          }
         >
-          <Download className="size-3" strokeWidth={2} /> Download
+          <Download className="size-3" strokeWidth={2} />
+          {position.mode === "text"
+            ? "Download text"
+            : sourceError
+              ? "Original unavailable"
+              : "Download original"}
         </button>
       </header>
 

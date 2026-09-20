@@ -253,10 +253,79 @@ class EmailEnvelope(BaseModel):
     recipients: list[str] = Field(default_factory=list)
     subject: str = ""
     plain_text_body: str = ""
-    html_body: str = ""
+    html_body: str | None = None
     received_at: str | None = None
     attachments: list[tuple[str, str, bytes]] = Field(default_factory=list)
     source_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 TERMINAL_STATES = {ProcessingState.TERMINAL, ProcessingState.DEAD_LETTER}
+
+
+
+class SIArtifactMetadata(BaseModel):
+    document_id: str
+    filename: str
+    content_type: str = "text/plain"
+    gcs_uri: str
+    size_bytes: int = 0
+    sha256: str = ""
+    status: str = "generated"  # generated, verified, approved, returned
+    verified_at: str | None = None
+    verified_by: str | None = None
+    approved_at: str | None = None
+    approved_by: str | None = None
+    returned_at: str | None = None
+
+
+class CategoryWorkflowState(BaseModel):
+    category: EmailCategory
+    stage: str
+    assigned_team: str | None = None
+    si_artifact: SIArtifactMetadata | None = None
+    si_fields: dict[str, Any] = Field(default_factory=dict)
+    is_blocked: bool = False
+    block_reason: str | None = None
+    updated_at: str | None = None
+    updated_by: str | None = None
+
+
+class SIRouteRequest(BaseModel):
+    team: str = Field(min_length=1, max_length=100)
+    expected_version: int = Field(ge=0)
+
+
+class SIVerifyRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    fields: dict[str, Any] = Field(default_factory=dict)
+    note: str = Field(default="", max_length=2000)
+
+
+class SIApproveRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    note: str = Field(default="", max_length=2000)
+
+
+class SIReturnRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+
+
+class CategoryDraftRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    custom_instructions: str = Field(default="", max_length=2000)
+
+
+class CategoryCompleteRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    note: str = Field(default="", max_length=2000)
+
+
+class BlockSenderRequest(BaseModel):
+    sender: str | None = Field(default=None, max_length=320)
+    reason: str = Field(default="", max_length=1000)
+    expected_version: int | None = Field(default=None, ge=0)
+
+
+class NotSpamRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    reclassify_as: EmailCategory = EmailCategory.GENERAL

@@ -19,6 +19,9 @@ def ingest_gmail_message(runtime: Runtime, message_id: str) -> str | None:
     message_data = runtime.gmail.get_message(message_id)
     envelope = runtime.gmail.parse_email_envelope(message_data)
 
+    if runtime.repository.is_sender_blocked(envelope.sender):
+        return None
+
     metadata = {
         "source_type": "gmail",
         "source_message_id": envelope.message_id,
