@@ -10,17 +10,17 @@ import httpx
 from backend.core.repository import CaseRepository, utcnow
 
 TELEGRAM_BOT_DESCRIPTION = (
-    "ClassAll is an intelligent maritime shipping document triage and reconciliation agent. "
+    "ShipVerify is an intelligent maritime shipping document triage and reconciliation agent. "
     "Upload Shipping Instructions (SI) and draft Bills of Lading (BL) to automatically detect "
     "discrepancies across 7 verified fields, review alerts, and coordinate email responses."
 )
 
 TELEGRAM_BOT_SHORT_DESCRIPTION = (
-    "ClassAll Maritime Shipping Document Triage & SI/BL Discrepancy Verification Agent."
+    "ShipVerify Maritime Shipping Document Triage & SI/BL Discrepancy Verification Agent."
 )
 
 TELEGRAM_WELCOME_TEXT = (
-    "🚢 <b>Welcome to ClassAll Maritime Triage Agent!</b>\n\n"
+    "🚢 <b>Welcome to ShipVerify Maritime Triage Agent!</b>\n\n"
     "I am your automated operations assistant for maritime shipping correspondence "
     "and shipping document verification.\n\n"
     "<b>What I can do for you:</b>\n"
@@ -42,7 +42,7 @@ TELEGRAM_WELCOME_TEXT = (
 )
 
 TELEGRAM_HELP_TEXT = (
-    "📋 <b>ClassAll Maritime Agent — Command Guide:</b>\n\n"
+    "📋 <b>ShipVerify Maritime Agent — Command Guide:</b>\n\n"
     "<b>Case Intake Workflow:</b>\n"
     "• <code>/newcase</code> — Generate a unique tracking token (e.g. <code>#a1b2c3</code>)\n"
     "• Attach SI and BL documents (PDF, Word, or image) using caption <code>#TOKEN</code>\n"

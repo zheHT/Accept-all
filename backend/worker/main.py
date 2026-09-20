@@ -134,7 +134,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                 drive_link = f"{runtime.settings.dashboard_base_url.rstrip('/')}/knowledge-base"
                 runtime.telegram.send_message(
                     runtime.settings.telegram_admin_chat_id,
-                    "<b>ClassAll weekly summary & Knowledge Base published</b>\n"
+                    "<b>ShipVerify weekly summary & Knowledge Base published</b>\n"
                     f"Week: <code>{iso_week}</code>\n"
                     f"Cases analyzed: {published.get('cases_analyzed', 0)}\n"
                     f"Status: {json.dumps(published.get('status_counts', {}), sort_keys=True)}\n"

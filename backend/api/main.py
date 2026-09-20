@@ -1050,7 +1050,7 @@ def _process_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
             answer = runtime.explainer.assist(text)
         except Exception:
             answer = (
-                "🚢 <b>ClassAll Maritime Assistant</b>\n\n"
+                "🚢 <b>ShipVerify Maritime Assistant</b>\n\n"
                 "I can help cross-check Shipping Instructions against draft Bills of Lading.\n\n"
                 "• Send <code>/newcase</code> to start a new document check.\n"
                 "• Upload documents with caption <code>#TOKEN</code>, then send <code>/submit TOKEN</code>.\n"

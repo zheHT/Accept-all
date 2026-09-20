@@ -187,11 +187,11 @@ if gcloud secrets versions list telegram-bot-token --project "$PROJECT_ID" --fil
 
     curl -s -X POST "https://api.telegram.org/bot${TOKEN}/setMyDescription" \
         -H "Content-Type: application/json" \
-        -d '{"description":"ClassAll is an intelligent maritime shipping document triage and reconciliation agent. Upload Shipping Instructions (SI) and draft Bills of Lading (BL) to automatically detect discrepancies across 7 verified fields, review alerts, and coordinate email responses."}' >/dev/null
+        -d '{"description":"ShipVerify is an intelligent maritime shipping document triage and reconciliation agent. Upload Shipping Instructions (SI) and draft Bills of Lading (BL) to automatically detect discrepancies across 7 verified fields, review alerts, and coordinate email responses."}' >/dev/null
 
     curl -s -X POST "https://api.telegram.org/bot${TOKEN}/setMyShortDescription" \
         -H "Content-Type: application/json" \
-        -d '{"short_description":"ClassAll Maritime Shipping Document Triage & SI/BL Discrepancy Verification Agent."}' >/dev/null
+        -d '{"short_description":"ShipVerify Maritime Shipping Document Triage & SI/BL Discrepancy Verification Agent."}' >/dev/null
 fi
 
 echo "Configuring and deploying Firebase..."
