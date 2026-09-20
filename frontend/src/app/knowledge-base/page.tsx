@@ -170,7 +170,7 @@ export default function KnowledgeBasePage() {
               />
             </div>
           ) : (
-            <ol className="flex-1 min-h-0 divide-y divide-line overflow-y-auto overscroll-contain max-h-[600px] xl:max-h-none">
+            <ol className="flex-1 min-h-0 divide-y divide-line overflow-y-auto max-h-[600px] xl:max-h-none">
               {publications.map((week, index) => (
                 <WeeklyBriefing
                   key={week.week}
@@ -242,7 +242,7 @@ export default function KnowledgeBasePage() {
                 />
               </div>
             ) : (
-              <ul className="flex-1 min-h-0 divide-y divide-line overflow-y-auto overscroll-contain max-h-[600px] xl:max-h-none">
+              <ul className="flex-1 min-h-0 divide-y divide-line overflow-y-auto max-h-[600px] xl:max-h-none">
                 {visibleAssumptions.map((item) => <AssumptionItem key={item.assumption_id} item={item} />)}
               </ul>
             )}
