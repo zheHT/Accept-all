@@ -66,10 +66,25 @@ class FakeGmail(GmailClient):
     def get_attachment(self, message_id: str, attachment_id: str) -> bytes:
         return b"fake attachment data"
 
-    def create_reply_draft(self, *, to, subject, body, thread_id, message_id_header=""):
+    def create_reply_draft(
+        self,
+        *,
+        to,
+        subject,
+        body,
+        thread_id,
+        message_id_header="",
+        attachments=None,
+    ):
         del message_id_header
         draft_id = f"draft-{len(self.drafts) + 1}"
-        self.drafts[draft_id] = {"to": to, "subject": subject, "body": body, "thread_id": thread_id}
+        self.drafts[draft_id] = {
+            "to": to,
+            "subject": subject,
+            "body": body,
+            "thread_id": thread_id,
+            "attachments": attachments or [],
+        }
         return {"id": draft_id}
 
     def update_draft(self, draft_id, *, to, subject, body, thread_id):

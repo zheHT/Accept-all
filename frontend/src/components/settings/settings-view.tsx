@@ -197,11 +197,21 @@ export function SettingsView() {
         >
         <Row
           title={settings.data?.gmail.address || "Gmail account"}
-          detail={`OAuth: ${settings.data?.gmail.oauth_status || "not connected"} · Watch: ${settings.data?.gmail.watch_expiration ? formatDate(settings.data.gmail.watch_expiration) : "not active"}`}
+          detail={
+            settings.data?.gmail.client_configured === false || settings.data?.gmail.oauth_status === "Gmail OAuth client not configured"
+              ? "OAuth client secret not configured in environment. Gmail compose fallback mode is active."
+              : `OAuth: ${settings.data?.gmail.oauth_status || "not connected"} · Watch: ${settings.data?.gmail.watch_expiration ? formatDate(settings.data.gmail.watch_expiration) : "not active"}`
+          }
         >
           <button
             type="button"
             className="btn-glass"
+            disabled={settings.data?.gmail.client_configured === false || settings.data?.gmail.oauth_status === "Gmail OAuth client not configured"}
+            title={
+              settings.data?.gmail.client_configured === false || settings.data?.gmail.oauth_status === "Gmail OAuth client not configured"
+                ? "Configure GMAIL_OAUTH_CLIENT_JSON to enable shared mailbox connection."
+                : undefined
+            }
             onClick={() => void startGmailOAuth().then(({ authorization_url }) => window.location.assign(authorization_url)).catch((error: unknown) => toast({ title: "Could not start Gmail connection", description: error instanceof Error ? error.message : "Please retry.", tone: "warning" }))}
           >
             <ExternalLink className="size-4" />

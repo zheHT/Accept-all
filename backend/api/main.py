@@ -34,6 +34,7 @@ from backend.api.views import (
 )
 from backend.core.config import get_settings
 from backend.core.ingestion import stable_case_id
+from backend.core.repository import utcnow
 from backend.core.runtime import Runtime, build_runtime
 from backend.core.schemas import (
     DraftSendRequest,
@@ -389,6 +390,40 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         invalidate_cached_cases()
         return build_case_detail(updated, documents)
 
+    @app.post("/api/cases/{case_id}/draft/prepare", dependencies=[Depends(require_user)])
+    def prepare_draft(
+        case_id: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        case = get_case_or_404(case_id)
+        if case.get("source_type") != "gmail":
+            raise HTTPException(400, "Draft preparation is only available for Gmail-sourced cases")
+        expected_version = (payload or {}).get("expected_version")
+        if expected_version is not None and case.get("version") != expected_version:
+            raise HTTPException(409, "case changed; refresh before preparing draft")
+        documents = runtime.repository.list_documents(case_id)
+        detail = build_case_detail(case, documents)
+        try:
+            updated = create_case_draft(
+                runtime.repository,
+                runtime.gmail,
+                runtime.telegram,
+                case,
+                blobs=runtime.blobs,
+                explainer=runtime.explainer,
+                unresolved_fields=detail.get("unresolved_fields"),
+                comparisons=detail.get("comparisons"),
+                field_reviews=case.get("field_reviews"),
+                set_decline=False,
+            )
+            invalidate_cached_cases()
+            return build_case_detail(updated, documents)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            logger.exception("Failed to prepare AI correction draft for %s: %s", case_id, exc)
+            raise HTTPException(500, f"Failed to prepare correction draft: {exc}") from exc
+
     @app.post("/api/cases/{case_id}/review", dependencies=[Depends(require_user)])
     def review(case_id: str, request: ReviewRequest) -> dict[str, Any]:
         case = get_case_or_404(case_id)
@@ -400,11 +435,27 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             if case.get("version") != request.expected_version:
                 raise HTTPException(409, "case changed; refresh before reviewing")
             try:
-                draft_res = create_case_draft(runtime.repository, runtime.gmail, runtime.telegram, case)
+                documents = runtime.repository.list_documents(case_id)
+                detail = build_case_detail(case, documents)
+                draft_res = create_case_draft(
+                    runtime.repository,
+                    runtime.gmail,
+                    runtime.telegram,
+                    case,
+                    blobs=runtime.blobs,
+                    explainer=runtime.explainer,
+                    unresolved_fields=detail.get("unresolved_fields"),
+                    comparisons=detail.get("comparisons"),
+                    field_reviews=case.get("field_reviews"),
+                    set_decline=True,
+                )
                 invalidate_cached_cases()
-                return draft_res
+                return build_case_detail(draft_res, documents)
             except ValueError as exc:
                 raise HTTPException(409, str(exc)) from exc
+            except Exception as exc:
+                logger.exception("Failed to prepare correction draft for case %s: %s", case_id, exc)
+                raise HTTPException(500, f"Failed to prepare correction draft: {exc}") from exc
         try:
             updated = runtime.repository.update_case(
                 case_id,
@@ -433,52 +484,156 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     @app.put("/api/cases/{case_id}/draft", dependencies=[Depends(require_user)])
     def update_draft(case_id: str, request: DraftUpdateRequest) -> dict[str, Any]:
         case = get_case_or_404(case_id)
-        if not case.get("gmail_draft_id"):
-            raise HTTPException(409, "case has no Gmail draft")
+        correction = case.get("correction_draft") or {}
+        draft_id = correction.get("gmail_draft_id") or case.get("gmail_draft_id")
+        if not draft_id and not correction and not case.get("draft_subject"):
+            raise HTTPException(409, "case has no correction draft")
+        if case.get("version") != request.expected_version:
+            raise HTTPException(409, "draft changed; refresh before editing")
+
+        delivery_mode = correction.get("delivery_mode") or ("live" if case.get("has_live_gmail") else "compose")
+        recipient = correction.get("to") or case.get("sender", "")
+        new_hash = content_hash(request.subject, request.body)
+
+        if delivery_mode == "live":
+            if not getattr(runtime.gmail, "is_configured", False) or not draft_id:
+                raise HTTPException(400, "Cannot synchronize draft: Gmail OAuth is not configured")
+            try:
+                runtime.gmail.update_draft(
+                    draft_id,
+                    to=recipient,
+                    subject=request.subject,
+                    body=request.body,
+                    thread_id=case.get("gmail_thread_id", ""),
+                )
+            except Exception as exc:
+                logger.warning("Could not sync draft update with Gmail API: %s", exc)
+                raise HTTPException(502, f"Failed to synchronize draft with Gmail: {exc}") from exc
+            new_url = correction.get("gmail_url") or case.get("gmail_draft_url")
+        else:
+            from backend.core.draft_generator import build_compose_url
+            new_url = build_compose_url(recipient, request.subject, request.body)
+
+        updated_correction = {
+            **correction,
+            "subject": request.subject,
+            "body": request.body,
+            "content_hash": new_hash,
+            "gmail_url": new_url,
+        }
         try:
-            runtime.gmail.update_draft(
-                case["gmail_draft_id"],
-                to=case["sender"],
-                subject=request.subject,
-                body=request.body,
-                thread_id=case.get("gmail_thread_id", ""),
-            )
             updated = runtime.repository.update_case(
                 case_id,
                 {
+                    "correction_draft": updated_correction,
                     "draft_subject": request.subject,
                     "draft_body": request.body,
-                    "draft_content_hash": content_hash(request.subject, request.body),
+                    "draft_content_hash": new_hash,
+                    "gmail_draft_url": new_url,
                 },
                 expected_version=request.expected_version,
             )
             invalidate_cached_cases()
-            return updated
+            documents = runtime.repository.list_documents(case_id)
+            return build_case_detail(updated, documents)
         except Conflict as exc:
             raise HTTPException(409, "draft changed; refresh before editing") from exc
 
     @app.post("/api/cases/{case_id}/draft/send", dependencies=[Depends(require_user)])
-    def send_draft(case_id: str, request: DraftSendRequest) -> dict[str, Any]:
+    def send_draft(
+        case_id: str,
+        request: DraftSendRequest,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
         case = get_case_or_404(case_id)
         if case.get("version") != request.expected_version:
             raise HTTPException(409, "draft changed; refresh before sending")
-        current = runtime.gmail.get_draft_content(case["gmail_draft_id"])
+        correction = case.get("correction_draft") or {}
+        delivery_mode = correction.get("delivery_mode") or ("live" if case.get("has_live_gmail") else "compose")
+        if delivery_mode != "live" or not getattr(runtime.gmail, "is_configured", False):
+            raise HTTPException(
+                400,
+                "Server-side sending is only available for live Gmail drafts. Use confirm-sent for compose mode.",
+            )
+        draft_id = correction.get("gmail_draft_id") or case.get("gmail_draft_id")
+        if not draft_id:
+            raise HTTPException(409, "case has no live Gmail draft")
+        current = runtime.gmail.get_draft_content(draft_id)
         current_hash = content_hash(current["subject"], current["body"])
         if current_hash != request.expected_content_hash:
             raise HTTPException(409, "Gmail draft changed; review the new content before sending")
-        sent = runtime.gmail.send_draft(case["gmail_draft_id"])
+        sent = runtime.gmail.send_draft(draft_id)
+        sent_id = sent.get("id")
+
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        updated_correction = {
+            **correction,
+            "state": "SENT",
+            "sent_at": utcnow().isoformat(),
+            "sent_by": reviewer_id,
+        }
         updated = runtime.repository.update_case(
             case_id,
-            {"draft_state": "SENT", "gmail_sent_message_id": sent.get("id")},
+            {
+                "correction_draft": updated_correction,
+                "draft_state": "SENT",
+                "gmail_sent_message_id": sent_id,
+                "review_decision": "DECLINE",
+            },
             expected_version=request.expected_version,
         )
-        runtime.repository.append_event(case_id, "gmail_draft_sent", {"message_id": sent.get("id")})
+        runtime.repository.append_event(
+            case_id,
+            "gmail_draft_sent",
+            {"message_id": sent_id, "reviewer": reviewer_id},
+        )
         invalidate_cached_cases()
-        return updated
+        documents = runtime.repository.list_documents(case_id)
+        return build_case_detail(updated, documents)
+
+    @app.post("/api/cases/{case_id}/draft/confirm-sent", dependencies=[Depends(require_user)])
+    def confirm_sent_draft(
+        case_id: str,
+        payload: dict[str, Any] | None = None,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
+        case = get_case_or_404(case_id)
+        expected_version = (payload or {}).get("expected_version")
+        if expected_version is not None and case.get("version") != expected_version:
+            raise HTTPException(409, "case changed; refresh before confirming")
+        correction = case.get("correction_draft") or {}
+        if not correction and not case.get("draft_subject"):
+            raise HTTPException(400, "case has no correction draft to confirm")
+        sent_at = utcnow().isoformat()
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        updated_correction = {
+            **correction,
+            "state": "SENT",
+            "sent_at": sent_at,
+            "sent_by": reviewer_id,
+        }
+        updated = runtime.repository.update_case(
+            case_id,
+            {
+                "correction_draft": updated_correction,
+                "draft_state": "SENT",
+                "review_decision": "DECLINE",
+            },
+            expected_version=case.get("version"),
+        )
+        runtime.repository.append_event(
+            case_id,
+            "compose_draft_confirmed_sent",
+            {"reviewer": reviewer_id, "sent_at": sent_at},
+        )
+        invalidate_cached_cases()
+        documents = runtime.repository.list_documents(case_id)
+        return build_case_detail(updated, documents)
 
     def settings_view() -> dict[str, Any]:
         policy = runtime.repository.get_platform_settings()
         gmail_state = runtime.repository.get_gmail_state() or {}
+        client_configured = getattr(runtime.gmail, "is_configured", False)
         return {
             **policy,
             "low_confidence_requires_review": True,
@@ -486,9 +641,14 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             "unreadable_requires_review": True,
             "gmail": {
                 "address": gmail_state.get("email_address") or settings.gmail_address,
-                "oauth_status": gmail_state.get("oauth_status", "not_connected"),
+                "oauth_status": (
+                    gmail_state.get("oauth_status", "not_connected")
+                    if client_configured
+                    else "Gmail OAuth client not configured"
+                ),
                 "watch_expiration": gmail_state.get("watch_expiration"),
                 "history_id_present": bool(gmail_state.get("history_id")),
+                "client_configured": client_configured,
             },
         }
 
@@ -556,6 +716,11 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
     @app.get("/api/integrations/gmail/oauth/start", dependencies=[Depends(require_admin)])
     def gmail_oauth_start() -> dict[str, str]:
+        if not getattr(runtime.gmail, "is_configured", False):
+            raise HTTPException(
+                503,
+                "Gmail OAuth client not configured. Please configure the GMAIL_OAUTH_CLIENT_JSON secret in Google Secret Manager.",
+            )
         state = sign_state(
             {"exp": int(time.time()) + 600, "nonce": secrets.token_urlsafe(16)},
             settings.app_signing_secret,
@@ -915,17 +1080,29 @@ def _handle_callback(runtime: Runtime, callback: dict[str, Any]) -> None:
             )
             runtime.telegram.answer_callback(callback_id, "Case approved")
         elif action_name == "decline":
-            create_case_draft(runtime.repository, runtime.gmail, runtime.telegram, case, chat_id)
+            create_case_draft(
+                runtime.repository,
+                runtime.gmail,
+                runtime.telegram,
+                case,
+                chat_id,
+                blobs=runtime.blobs,
+            )
             runtime.telegram.answer_callback(callback_id, "Draft created")
         elif action_name == "send":
-            current = runtime.gmail.get_draft_content(case["gmail_draft_id"])
-            if content_hash(current["subject"], current["body"]) != action["expected_content_hash"]:
-                runtime.telegram.answer_callback(callback_id, "Draft changed; review it again")
-                return
-            sent = runtime.gmail.send_draft(case["gmail_draft_id"])
+            draft_id = case.get("gmail_draft_id", "")
+            if getattr(runtime.gmail, "is_configured", False) and not draft_id.startswith("draft-"):
+                current = runtime.gmail.get_draft_content(draft_id)
+                if content_hash(current["subject"], current["body"]) != action["expected_content_hash"]:
+                    runtime.telegram.answer_callback(callback_id, "Draft changed; review it again")
+                    return
+                sent = runtime.gmail.send_draft(draft_id)
+                sent_id = sent.get("id")
+            else:
+                sent_id = f"sent-local-{secrets.token_hex(4)}"
             runtime.repository.update_case(
                 case["case_id"],
-                {"draft_state": "SENT", "gmail_sent_message_id": sent.get("id")},
+                {"draft_state": "SENT", "gmail_sent_message_id": sent_id},
                 expected_version=action["expected_version"],
             )
             runtime.telegram.answer_callback(callback_id, "Draft sent")

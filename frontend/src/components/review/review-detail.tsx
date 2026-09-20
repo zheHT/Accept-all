@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -20,11 +20,16 @@ import {
   Send,
   Save,
   Check,
+  CheckCheck,
   AlertCircle,
+  Paperclip,
+  Sparkles,
+  RefreshCw,
+  Download,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/components/auth/auth-provider";
-import type { CaseDetail } from "@/lib/api";
+import { type CaseDetail, getDocumentContent } from "@/lib/api";
 import { DocumentComparison } from "@/components/ui/document-comparison";
 import {
   type ReviewCase,
@@ -39,13 +44,11 @@ import { buildDocumentLines } from "@/lib/document-text";
 type DecisionType = ReviewDecision["type"];
 
 const WORKFLOW_STEPS = [
-  "Incoming email",
-  "AI classification",
-  "SI + BL extraction",
-  "Validation",
-  "Uncertain result",
-  "Human review",
-  "Human confirms / corrects",
+  "Document comparison",
+  "Discrepancy detection",
+  "Confidence scoring",
+  "Review required",
+  "Human decision",
   "Final verification result",
   "Case resolved",
 ];
@@ -74,6 +77,10 @@ export function ReviewDetail({
   onSubmit,
   onFinalize,
   onDeclineCase,
+  onPrepareDraft,
+  onConfirmSentDraft,
+  preparingDraft = false,
+  confirmingSent = false,
   onBack,
   onSaveDraft,
   onSendDraft,
@@ -83,11 +90,47 @@ export function ReviewDetail({
   onSubmit: (decision: ReviewDecision) => void;
   onFinalize?: () => void;
   onDeclineCase?: () => void;
+  onPrepareDraft?: () => void;
+  onConfirmSentDraft?: () => void;
+  preparingDraft?: boolean;
+  confirmingSent?: boolean;
   onBack: () => void;
   onSaveDraft: (subject: string, body: string) => void;
   onSendDraft: () => void;
 }) {
   const { user } = useAuth();
+  const onPrepare = onPrepareDraft || onDeclineCase;
+  const draftSectionRef = useRef<HTMLElement>(null);
+  const prevDraftHashRef = useRef<string | undefined>(caseDetail?.draft?.content_hash);
+
+  useEffect(() => {
+    if (caseDetail?.draft && caseDetail.draft.content_hash !== prevDraftHashRef.current) {
+      prevDraftHashRef.current = caseDetail.draft.content_hash;
+      draftSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [caseDetail?.draft]);
+
+  const handleDownloadAttachment = async (filename: string) => {
+    if (!caseDetail) return;
+    const doc = caseDetail.documents?.find((d) => d.filename === filename) || caseDetail.documents?.[0];
+    if (doc) {
+      try {
+        const { blob } = await getDocumentContent(caseDetail.case_id, doc.document_id);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        return;
+      } catch (e) {
+        console.error("Failed to download binary document", e);
+      }
+    }
+  };
+
   const [decisionType, setDecisionType] = useState<DecisionType | null>(null);
   const [dualPreview, setDualPreview] = useState(false);
   const [correctedValue, setCorrectedValue] = useState("");
@@ -134,7 +177,15 @@ export function ReviewDetail({
   const activeFieldLabel = comparison?.label || reviewCase.problemField;
   const siValue = comparison?.si ?? reviewCase.si.extractedValue;
   const aiValue = comparison?.bl ?? reviewCase.bl.extractedValue;
-  const confidencePct = Math.round(reviewCase.confidence * 100);
+  const activeComparison = caseDetail?.comparisons?.find((c) => c.field === selectedField);
+  const activeConfidences = [
+    activeComparison?.si?.confidence,
+    activeComparison?.bl?.confidence,
+  ].filter((v): v is number => typeof v === "number" && v > 0);
+  const fieldConfidence = activeConfidences.length
+    ? activeConfidences.reduce((a, b) => a + b, 0) / activeConfidences.length
+    : reviewCase.confidence;
+  const confidencePct = Math.round(fieldConfidence * 100);
 
   // Calculate discrepancies and resolution stats
   const mismatchCount = fields.filter((f) => f.discrepancyType === "mismatch").length;
@@ -475,29 +526,6 @@ export function ReviewDetail({
         />
       </section>
 
-      {/* AI Extraction Fact Comparison */}
-      <section className="glass glass-sheen p-6">
-        <p className="eyebrow">Extraction values — {activeFieldLabel}</p>
-        <dl className="mt-4 grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-5">
-          <Fact label="Field" value={activeFieldLabel} />
-          <Fact label="SI value" value={siValue ?? "—"} />
-          <Fact label="BL value" value={aiValue ?? "Unknown"} tone={aiValue ? "neutral" : "warn"} />
-          <Fact label="AI confidence" value={`${confidencePct}%`} tone="warn" />
-          <Fact
-            label="Field status"
-            value={
-              existingReview?.resolved
-                ? `Resolved (${decisionLabel(existingReview.decision)})`
-                : comparison?.discrepancyType === "mismatch"
-                  ? "Discrepancy / Mismatch"
-                  : comparison?.discrepancyType === "missing"
-                    ? "Missing value"
-                    : "Needs Confirmation"
-            }
-            tone={existingReview?.resolved ? "good" : "warn"}
-          />
-        </dl>
-      </section>
 
       {/* Structured Decision & Audit Trail Card */}
       <section className="glass glass-sheen p-6">
@@ -665,57 +693,149 @@ export function ReviewDetail({
         )}
 
         {/* Case Actions Bar */}
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5">
-          <div className="text-[12.5px] text-ink-600">
-            {unresolvedCount === 0 ? (
-              <span className="font-semibold text-matched-700">
-                ✓ All 7 fields checked and resolved ({resolvedCount} decisions recorded).
-              </span>
-            ) : (
-              <span className="text-review-700 font-medium">
-                {unresolvedCount} field(s) remain unresolved before verification can be approved.
-              </span>
-            )}
+        <div className="mt-6 flex flex-col gap-3 border-t border-line pt-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-[12.5px] text-ink-600">
+              {unresolvedCount === 0 ? (
+                <span className="font-semibold text-matched-700">
+                  ✓ All 7 fields checked and resolved ({resolvedCount} decisions recorded).
+                </span>
+              ) : (
+                <span className="text-review-700 font-medium">
+                  {unresolvedCount} field(s) remain unresolved before verification can be approved.
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {onPrepare && (
+                <button
+                  type="button"
+                  className="btn-glass inline-flex items-center gap-2"
+                  disabled={preparingDraft}
+                  onClick={onPrepare}
+                  title="Prepare an AI correction draft for counterparty clarification"
+                >
+                  {preparingDraft ? (
+                    <RefreshCw className="size-4 animate-spin text-brand-500" />
+                  ) : (
+                    <Sparkles className="size-4 text-brand-500" />
+                  )}
+                  {preparingDraft ? "Preparing AI draft..." : "Prepare AI correction draft"}
+                </button>
+              )}
+              {onFinalize && (
+                <button
+                  type="button"
+                  disabled={!canFinalize}
+                  onClick={onFinalize}
+                  className={cn(
+                    "btn-primary",
+                    !canFinalize && "cursor-not-allowed opacity-45",
+                  )}
+                  title={canFinalize ? "Approve case verification" : "Resolve all 7 fields before approving"}
+                >
+                  <CheckCircle2 className="size-4" strokeWidth={2.25} />
+                  Finalize verification
+                </button>
+              )}
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {onDeclineCase && (
-              <button type="button" className="btn-glass" onClick={onDeclineCase}>
-                Prepare carrier correction draft
-              </button>
-            )}
-            {onFinalize && (
-              <button
-                type="button"
-                disabled={!canFinalize}
-                onClick={onFinalize}
-                className={cn(
-                  "btn-primary",
-                  !canFinalize && "cursor-not-allowed opacity-45",
-                )}
-                title={canFinalize ? "Approve case verification" : "Resolve all 7 fields before approving"}
-              >
-                <CheckCircle2 className="size-4" strokeWidth={2.25} />
-                Finalize verification
-              </button>
-            )}
-          </div>
+          {unresolvedCount > 0 && (
+            <p className="text-[11.5px] text-ink-400">
+              Note: Verification approval is blocked while fields remain unresolved. Use &quot;Prepare AI correction draft&quot; to request clarification from the shipper or carrier.
+            </p>
+          )}
         </div>
       </section>
 
-      {/* Gmail Correction Draft Section (if prepared) */}
+      {/* AI Correction Draft Section (if prepared) */}
       {caseDetail?.draft && (
-        <section className="glass glass-sheen p-6">
+        <section ref={draftSectionRef} className="glass glass-sheen p-6 scroll-mt-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="eyebrow">Gmail correction draft</p>
+              <div className="flex items-center gap-2">
+                <p className="eyebrow">AI correction draft</p>
+                {caseDetail.draft.delivery_mode === "live" || caseDetail.draft.has_live_gmail ? (
+                  <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-600 dark:text-emerald-400 ring-1 ring-inset ring-emerald-500/20">
+                    Live Gmail Synced
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10.5px] font-semibold text-blue-600 dark:text-blue-400 ring-1 ring-inset ring-blue-500/20">
+                    Gmail Compose Window
+                  </span>
+                )}
+                {caseDetail.draft.origin === "ai" ? (
+                  <span className="rounded-full bg-purple-500/10 px-2 py-0.5 text-[10.5px] font-semibold text-purple-600 dark:text-purple-400 ring-1 ring-inset ring-purple-500/20">
+                    AI Generated
+                  </span>
+                ) : caseDetail.draft.origin === "template" ? (
+                  <span className="rounded-full bg-surface px-2 py-0.5 text-[10.5px] font-medium text-ink-500 ring-1 ring-inset ring-line">
+                    Standard Template
+                  </span>
+                ) : null}
+              </div>
               <p className="mt-1.5 text-[12.5px] text-ink-500">
-                Review the generated correction draft before sending it to the counterparty.
+                {caseDetail.draft.delivery_mode === "live" || caseDetail.draft.has_live_gmail
+                  ? "Review the generated correction draft and attached documents synced with your shared Gmail mailbox."
+                  : "Draft prepared for your Gmail compose window. Review the content and download attachments to include them."}
               </p>
             </div>
-            <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-500 ring-1 ring-inset ring-line">
-              {caseDetail.draft.state}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-500 ring-1 ring-inset ring-line">
+                {caseDetail.draft.state}
+              </span>
+              {caseDetail.draft.gmail_url && (
+                <a
+                  href={caseDetail.draft.gmail_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-glass inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-brand-600 dark:text-brand-400"
+                >
+                  <ExternalLink className="size-3.5" />
+                  {caseDetail.draft.delivery_mode === "live" ? "Open saved Gmail draft" : "Open Gmail compose"}
+                </a>
+              )}
+            </div>
           </div>
+
+          {/* Attachments Section */}
+          {((caseDetail.draft.attachments && caseDetail.draft.attachments.length > 0) ||
+            (caseDetail.documents && caseDetail.documents.length > 0)) && (
+            <div className="mt-4 rounded-lg bg-surface/50 p-3.5 ring-1 ring-inset ring-line/60">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-ink-500">
+                  <Paperclip className="size-3.5 text-ink-400" />
+                  <span>
+                    Attached Documents (
+                    {caseDetail.draft.attachments?.length || caseDetail.documents?.length || 0})
+                  </span>
+                </div>
+                {caseDetail.draft.delivery_mode !== "live" && !caseDetail.draft.has_live_gmail && (
+                  <span className="text-[11.5px] text-ink-400">
+                    Click any file to download and manually attach it in Gmail
+                  </span>
+                )}
+              </div>
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                {(caseDetail.draft.attachments && caseDetail.draft.attachments.length > 0
+                  ? caseDetail.draft.attachments
+                  : caseDetail.documents?.map((d) => d.filename) || []
+                ).map((filename, idx) => (
+                  <button
+                    key={`${filename}-${idx}`}
+                    type="button"
+                    onClick={() => void handleDownloadAttachment(filename)}
+                    title={`Download ${filename}`}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-surface-raised px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:text-brand-600 dark:text-ink-300 dark:hover:text-brand-400 ring-1 ring-inset ring-line hover:ring-brand-500 transition-colors"
+                  >
+                    <Paperclip className="size-3 text-brand-500" />
+                    <span>{filename}</span>
+                    <Download className="size-3 text-ink-400 hover:text-brand-500 ml-0.5" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="mt-4 flex flex-col gap-3">
             <label>
@@ -734,28 +854,71 @@ export function ReviewDetail({
                 onChange={(event) => setDraftBody(event.target.value)}
                 disabled={caseDetail.draft.state === "SENT"}
                 rows={8}
-                className="field-glass mt-2 resize-y px-3 py-2.5 leading-relaxed"
+                className="field-glass mt-2 resize-y px-3 py-2.5 leading-relaxed font-mono text-[13px]"
               />
             </label>
-            <div className="flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                className="btn-glass"
-                disabled={caseDetail.draft.state === "SENT"}
-                onClick={() => onSaveDraft(draftSubject, draftBody)}
-              >
-                <Save className="size-4" />
-                Save draft
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                disabled={caseDetail.draft.state === "SENT"}
-                onClick={onSendDraft}
-              >
-                <Send className="size-4" />
-                {caseDetail.draft.state === "SENT" ? "Sent" : "Send correction"}
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+              <div className="text-[12px] text-ink-400">
+                {caseDetail.draft.sent_at ? (
+                  <span>
+                    Sent on {new Date(caseDetail.draft.sent_at).toLocaleString()}
+                    {caseDetail.draft.sent_by ? ` by ${caseDetail.draft.sent_by}` : ""}
+                  </span>
+                ) : caseDetail.draft.prepared_at ? (
+                  <span>Prepared on {new Date(caseDetail.draft.prepared_at).toLocaleString()}</span>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="btn-glass inline-flex items-center gap-1.5"
+                  disabled={caseDetail.draft.state === "SENT"}
+                  onClick={() => onSaveDraft(draftSubject, draftBody)}
+                >
+                  <Save className="size-4" />
+                  Save draft
+                </button>
+                {caseDetail.draft.delivery_mode === "live" || caseDetail.draft.has_live_gmail ? (
+                  <button
+                    type="button"
+                    className="btn-primary inline-flex items-center gap-1.5"
+                    disabled={caseDetail.draft.state === "SENT"}
+                    onClick={onSendDraft}
+                  >
+                    <Send className="size-4" />
+                    {caseDetail.draft.state === "SENT" ? "Sent" : "Send correction"}
+                  </button>
+                ) : (
+                  <>
+                    {caseDetail.draft.gmail_url && (
+                      <a
+                        href={caseDetail.draft.gmail_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn-glass inline-flex items-center gap-1.5 px-3 py-2"
+                      >
+                        <ExternalLink className="size-4" />
+                        Open Gmail compose
+                      </a>
+                    )}
+                    {onConfirmSentDraft && (
+                      <button
+                        type="button"
+                        className="btn-primary inline-flex items-center gap-1.5"
+                        disabled={caseDetail.draft.state === "SENT" || confirmingSent}
+                        onClick={onConfirmSentDraft}
+                      >
+                        {confirmingSent ? (
+                          <RefreshCw className="size-4 animate-spin" />
+                        ) : (
+                          <CheckCheck className="size-4" />
+                        )}
+                        {caseDetail.draft.state === "SENT" ? "Confirmed sent" : "Confirm sent from Gmail"}
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </section>
@@ -1000,31 +1163,6 @@ function DecisionOption({
   );
 }
 
-function Fact({
-  label,
-  value,
-  tone = "neutral",
-}: {
-  label: string;
-  value: string;
-  tone?: "neutral" | "good" | "warn";
-}) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-400">{label}</dt>
-      <dd
-        className={cn(
-          "mt-1.5 text-[13.5px] font-semibold",
-          tone === "neutral" && "text-ink-900",
-          tone === "good" && "text-matched-700",
-          tone === "warn" && "text-review-700",
-        )}
-      >
-        {value}
-      </dd>
-    </div>
-  );
-}
 
 function WorkflowStrip({ currentIndex }: { currentIndex: number }) {
   return (

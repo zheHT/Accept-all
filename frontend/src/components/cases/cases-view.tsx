@@ -415,7 +415,7 @@ export function CasesView() {
                   <th scope="col" className="px-4 py-3 font-semibold">
                     Docs
                   </th>
-                  <th scope="col" className="px-4 py-3 font-semibold">
+                  <th scope="col" className="whitespace-nowrap px-4 py-3 font-semibold">
                     Fields
                   </th>
                   <th scope="col" className="px-4 py-3 font-semibold">
@@ -486,7 +486,7 @@ export function CasesView() {
                         </span>
                       </td>
 
-                      <td className="border-t border-line px-4 py-4 align-middle">
+                      <td className="whitespace-nowrap border-t border-line px-4 py-4 align-middle">
                         <FieldsMeter checked={item.fieldsChecked} />
                       </td>
 
@@ -591,11 +591,11 @@ function FieldsMeter({ checked }: { checked: number | null }) {
   const complete = checked === total;
 
   return (
-    <span className="flex items-center gap-2">
-      <span className="tabular text-[12.5px] font-medium text-ink-700">
+    <span className="inline-flex items-center gap-2 whitespace-nowrap">
+      <span className="tabular whitespace-nowrap text-[12.5px] font-medium text-ink-700">
         {checked} / {total}
       </span>
-      <span className="h-1.5 w-10 overflow-hidden rounded-full bg-surface/80 ring-1 ring-inset ring-line">
+      <span className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-surface/80 ring-1 ring-inset ring-line">
         <span
           className={cn(
             "block h-full rounded-full bg-gradient-to-r",

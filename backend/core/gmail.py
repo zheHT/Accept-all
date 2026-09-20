@@ -33,8 +33,18 @@ def _walk_parts(part: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _client_config(raw: str) -> dict[str, Any]:
-    value = json.loads(raw)
-    if "web" not in value and "installed" not in value:
+    if not raw or not raw.strip():
+        raise RuntimeError(
+            "Gmail OAuth client JSON is not configured. Please set the GMAIL_OAUTH_CLIENT_JSON "
+            "secret in Google Secret Manager or environment."
+        )
+    try:
+        value = json.loads(raw)
+    except Exception as exc:
+        raise ValueError(
+            f"Invalid Gmail OAuth client JSON: expecting valid JSON but got: {exc}"
+        ) from exc
+    if not isinstance(value, dict) or ("web" not in value and "installed" not in value):
         raise ValueError("Gmail OAuth client JSON must contain web or installed configuration")
     return value
 
@@ -74,7 +84,21 @@ class GmailClient:
         flow.fetch_token(code=code)
         return flow.credentials
 
+    @property
+    def is_configured(self) -> bool:
+        if not self.client_json or not self.client_json.strip():
+            return False
+        try:
+            config = _client_config(self.client_json)
+            return bool(config.get("web") or config.get("installed"))
+        except Exception:
+            return False
+
     def _credentials(self) -> Credentials:
+        if not self.is_configured:
+            raise RuntimeError(
+                "Gmail OAuth client is not configured. Please set the GMAIL_OAUTH_CLIENT_JSON secret."
+            )
         config = _client_config(self.client_json)
         app = config.get("web") or config["installed"]
         refresh_token = (
@@ -252,6 +276,7 @@ class GmailClient:
         body: str,
         thread_id: str,
         message_id_header: str = "",
+        attachments: list[tuple[str, str, bytes]] | None = None,
     ) -> dict[str, Any]:
         message = EmailMessage()
         message["To"] = to
@@ -260,6 +285,20 @@ class GmailClient:
             message["In-Reply-To"] = message_id_header
             message["References"] = message_id_header
         message.set_content(body)
+        for filename, content_type, data in attachments or []:
+            if not data:
+                continue
+            ct = content_type or "application/octet-stream"
+            if "/" in ct:
+                maintype, subtype = ct.split("/", 1)
+            else:
+                maintype, subtype = "application", "octet-stream"
+            message.add_attachment(
+                data,
+                maintype=maintype,
+                subtype=subtype,
+                filename=filename,
+            )
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
         return (
             self.service()

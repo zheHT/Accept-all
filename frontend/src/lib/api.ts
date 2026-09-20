@@ -67,6 +67,7 @@ export interface CaseSummary {
   review_decision?: "APPROVE" | "DECLINE" | null;
   low_confidence: boolean;
   low_confidence_fields: string[];
+  confidence?: number | null;
   version: number;
   draft_state?: string | null;
   unresolved_fields?: string[];
@@ -105,7 +106,20 @@ export interface CaseDetail extends CaseSummary {
   comparisons: FieldComparison[];
   field_reviews?: Record<string, FieldReview>;
   review_history?: FieldReview[];
-  draft: { state: string; subject: string; body: string; content_hash: string } | null;
+  draft: {
+    state: string;
+    subject: string;
+    body: string;
+    content_hash: string;
+    delivery_mode?: "live" | "compose" | null;
+    origin?: "ai" | "template" | null;
+    gmail_url?: string | null;
+    has_live_gmail?: boolean;
+    attachments?: string[];
+    prepared_at?: string | null;
+    sent_at?: string | null;
+    sent_by?: string | null;
+  } | null;
 }
 export interface FieldReview {
   field: string;
@@ -140,7 +154,13 @@ export interface PlatformSettings {
   low_confidence_requires_review: true;
   missing_value_requires_review: true;
   unreadable_requires_review: true;
-  gmail: { address: string; oauth_status: string; watch_expiration?: string | null; history_id_present: boolean };
+  gmail: {
+    address: string;
+    oauth_status: string;
+    watch_expiration?: string | null;
+    history_id_present: boolean;
+    client_configured?: boolean;
+  };
 }
 export interface KnowledgeBaseWeek {
   week: string;
@@ -170,7 +190,17 @@ export interface AssumptionRecord {
 
 export const getDashboard = (period: DashboardResponse["period"], signal?: AbortSignal) => apiFetch<DashboardResponse>(`/api/dashboard?period=${period}`, { signal });
 export const getInbox = (signal?: AbortSignal, limit = 50) => apiFetch<PagedResponse<CaseSummary>>(`/api/inbox?limit=${limit}`, { signal });
-export const getCases = (signal?: AbortSignal, limit = 50) => apiFetch<PagedResponse<CaseSummary>>(`/api/cases?limit=${limit}`, { signal });
+export async function getCases(signal?: AbortSignal, limit = 200): Promise<PagedResponse<CaseSummary>> {
+  let cursor: string | null = null;
+  const items: CaseSummary[] = [];
+  do {
+    const url: string = `/api/cases?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+    const page: PagedResponse<CaseSummary> = await apiFetch<PagedResponse<CaseSummary>>(url, { signal });
+    items.push(...page.items);
+    cursor = page.next_cursor;
+  } while (cursor);
+  return { items, next_cursor: null };
+}
 export const getReviews = (signal?: AbortSignal, limit = 50) => apiFetch<PagedResponse<CaseSummary>>(`/api/reviews?limit=${limit}`, { signal });
 export const getSession = (signal?: AbortSignal) => apiFetch<SessionInfo>("/api/session", { signal });
 export const getCase = (id: string, signal?: AbortSignal) => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(id)}`, { signal });
@@ -229,6 +259,16 @@ export const reviewField = (
 export const retryCase = (item: CaseSummary) => apiFetch<CaseSummary>(`/api/cases/${encodeURIComponent(item.case_id)}/retry?expected_version=${item.version}`, { method: "POST" });
 export const reviewCase = (item: CaseSummary, decision: "APPROVE" | "DECLINE", note = "") => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(item.case_id)}/review`, { method: "POST", body: JSON.stringify({ decision, expected_version: item.version, note }) });
 export const updateDraft = (id: string, version: number, subject: string, body: string) => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(id)}/draft`, { method: "PUT", body: JSON.stringify({ subject, body, expected_version: version }) });
+export const prepareDraft = (caseId: string, expectedVersion?: number) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/draft/prepare`, {
+    method: "POST",
+    body: JSON.stringify({ expected_version: expectedVersion }),
+  });
+export const confirmSentDraft = (caseId: string, expectedVersion: number) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/draft/confirm-sent`, {
+    method: "POST",
+    body: JSON.stringify({ expected_version: expectedVersion }),
+  });
 export const sendDraft = (id: string, version: number, hash: string) => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(id)}/draft/send`, { method: "POST", body: JSON.stringify({ expected_version: version, expected_content_hash: hash }) });
 export const getSettings = (signal?: AbortSignal) => apiFetch<PlatformSettings>("/api/settings", { signal });
 export const saveSettings = (value: Pick<PlatformSettings, "confidence_threshold" | "mismatch_alerts_enabled">) => apiFetch<PlatformSettings>("/api/settings", { method: "PUT", body: JSON.stringify(value) });

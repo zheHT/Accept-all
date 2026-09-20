@@ -17,8 +17,10 @@ import {
 import { readParam, writeParam } from "@/lib/url-state";
 import {
   ApiError,
+  confirmSentDraft,
   getCase,
   getReviews,
+  prepareDraft,
   reviewField,
   reviewCase as reviewApiCase,
   sendDraft,
@@ -62,6 +64,8 @@ export function ReviewView() {
   const [group, setGroup] = useState<GroupFilter>("none");
   const [sort, setSort] = useState<SortOrder>("oldest");
   const [displayLimit, setDisplayLimit] = useState(25);
+  const [isPreparingDraft, setIsPreparingDraft] = useState(false);
+  const [isConfirmingSent, setIsConfirmingSent] = useState(false);
 
   useEffect(() => {
     if (!liveReviews.data) return;
@@ -218,18 +222,73 @@ export function ReviewView() {
 
   const prepareCorrectionDraft = useCallback(async () => {
     if (!activeDetail) return;
+    setIsPreparingDraft(true);
     try {
-      const updated = await reviewApiCase(activeDetail, "DECLINE", "Reviewer requested a correction draft.");
+      const updated = await prepareDraft(activeDetail.case_id, activeDetail.version);
       setActiveDetail(updated);
-      toast({ title: "Correction draft prepared", description: "Review the draft below before sending it. No message was sent.", tone: "success" });
+      setCases((current) => current.map((item) => (item.id === activeDetail.case_id ? reviewDetail(updated) : item)));
+      await liveReviews.refresh();
+
+      if (updated.draft?.gmail_url) {
+        const opened = window.open(updated.draft.gmail_url, "_blank");
+        if (!opened) {
+          toast({
+            title: "Pop-up blocked",
+            description: "Please allow pop-ups or click 'Open in Gmail' to view the draft.",
+            tone: "warning",
+          });
+        }
+      }
+
+      toast({
+        title: "AI correction draft prepared",
+        description: updated.draft?.delivery_mode === "live"
+          ? "Draft saved to shared Gmail mailbox with attachments. Review below before sending."
+          : "Draft ready in Gmail compose window. Review below and attach documents manually.",
+        tone: "success",
+      });
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         const refreshed = await getCase(activeDetail.case_id);
         setActiveDetail(refreshed);
       }
-      toast({ title: "Correction draft failed", description: error instanceof Error ? error.message : "Please retry.", tone: "warning" });
+      toast({
+        title: "Correction draft failed",
+        description: error instanceof Error ? error.message : "Please retry.",
+        tone: "warning",
+      });
+    } finally {
+      setIsPreparingDraft(false);
     }
-  }, [activeDetail, toast]);
+  }, [activeDetail, liveReviews, toast]);
+
+  const confirmSentCorrectionDraft = useCallback(async () => {
+    if (!activeDetail) return;
+    setIsConfirmingSent(true);
+    try {
+      const updated = await confirmSentDraft(activeDetail.case_id, activeDetail.version);
+      setActiveDetail(updated);
+      setCases((current) => current.map((item) => (item.id === activeDetail.case_id ? reviewDetail(updated) : item)));
+      await liveReviews.refresh();
+      toast({
+        title: "Sent status confirmed",
+        description: "Case marked as DECLINE with SENT status and recorded in audit log.",
+        tone: "success",
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        const refreshed = await getCase(activeDetail.case_id);
+        setActiveDetail(refreshed);
+      }
+      toast({
+        title: "Confirmation failed",
+        description: error instanceof Error ? error.message : "Please retry.",
+        tone: "warning",
+      });
+    } finally {
+      setIsConfirmingSent(false);
+    }
+  }, [activeDetail, liveReviews, toast]);
 
   const filtersActive = query.trim() !== "" || reason !== "all" || group !== "none" || sort !== "oldest";
 
@@ -300,7 +359,11 @@ export function ReviewView() {
         onBack={closeCase}
         onSubmit={(decision) => void submitDecision(activeCase.id, decision)}
         onFinalize={() => void finalizeCase()}
+        onPrepareDraft={() => void prepareCorrectionDraft()}
         onDeclineCase={() => void prepareCorrectionDraft()}
+        onConfirmSentDraft={() => void confirmSentCorrectionDraft()}
+        preparingDraft={isPreparingDraft}
+        confirmingSent={isConfirmingSent}
         onSaveDraft={(subject, body) => void saveDraft(subject, body)}
         onSendDraft={() => void deliverDraft()}
       />

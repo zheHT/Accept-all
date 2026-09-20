@@ -168,7 +168,7 @@ export default function KnowledgeBasePage() {
               detail="Publish the current week after reviewed operational cases are available."
             />
           ) : (
-            <ol className="divide-y divide-line">
+            <ol className="max-h-[760px] divide-y divide-line overflow-y-auto overscroll-contain">
               {publications.map((week, index) => (
                 <WeeklyBriefing
                   key={week.week}
