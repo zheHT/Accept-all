@@ -108,6 +108,37 @@ class TelegramClient:
     def answer_callback(self, callback_query_id: str, text: str) -> None:
         self._call("answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
 
+    def send_chat_action(self, chat_id: str | int, action: str = "typing") -> dict[str, Any]:
+        try:
+            return self._call("sendChatAction", {"chat_id": chat_id, "action": action})
+        except Exception:
+            return {}
+
+    def edit_message_text(
+        self,
+        chat_id: str | int,
+        message_id: int | str,
+        text: str,
+        *,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": int(message_id),
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        return self._call("editMessageText", payload)
+
+    def delete_message(self, chat_id: str | int, message_id: int | str) -> bool:
+        try:
+            return bool(self._call("deleteMessage", {"chat_id": chat_id, "message_id": int(message_id)}))
+        except Exception:
+            return False
+
     def get_file(self, file_id: str) -> tuple[bytes, str]:
         result = self._call("getFile", {"file_id": file_id})
         file_path = result["file_path"]

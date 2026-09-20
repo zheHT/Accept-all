@@ -28,6 +28,20 @@ class FakeTelegram:
     def answer_callback(self, callback_query_id, text):
         self.callbacks.append((callback_query_id, text))
 
+    def send_chat_action(self, chat_id, action="typing"):
+        return {"ok": True}
+
+    def edit_message_text(self, chat_id, message_id, text, *, reply_markup=None):
+        idx = int(message_id) - 1
+        if 0 <= idx < len(self.messages):
+            self.messages[idx] = (str(chat_id), text, reply_markup)
+            return {"message_id": message_id}
+        self.messages.append((str(chat_id), text, reply_markup))
+        return {"message_id": len(self.messages)}
+
+    def delete_message(self, chat_id, message_id):
+        return True
+
     def get_file(self, file_id):
         return b"document", f"documents/{file_id}.txt"
 

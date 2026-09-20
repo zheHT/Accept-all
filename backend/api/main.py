@@ -576,6 +576,7 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
     chat_id = str(message["chat"]["id"])
     text = (message.get("text") or message.get("caption") or "").strip()
     command = text.split(maxsplit=1)[0].split("@", 1)[0].lower() if text else ""
+    runtime.telegram.send_chat_action(chat_id, "typing")
     if text.startswith("/start"):
         runtime.telegram.send_message(chat_id, TELEGRAM_WELCOME_TEXT)
         return
@@ -585,6 +586,59 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
             TELEGRAM_HELP_TEXT.replace("/email-limit", "/email_limit")
             .replace("Show alert and hourly email settings", "Show alert and hourly email settings (admin)")
             .replace("Read a published weekly summary", "Open reports on the signed-in website"),
+        )
+        return
+    lower_text = text.lower().strip()
+    if lower_text in {
+        "close notification",
+        "close notifications",
+        "turn off notification",
+        "turn off notifications",
+        "disable notification",
+        "disable notifications",
+        "mute notification",
+        "mute notifications",
+        "notifications off",
+        "notification off",
+    }:
+        configured_admin = str(runtime.settings.telegram_admin_chat_id or "")
+        private_chat = message["chat"].get("type", "private") == "private"
+        sender_id = str(message.get("from", {}).get("id", chat_id))
+        if not configured_admin or not private_chat or chat_id != configured_admin or sender_id != chat_id:
+            runtime.telegram.send_message(
+                chat_id,
+                "Operational settings are managed by an administrator. You can still use all public bot features.",
+            )
+            return
+        runtime.repository.set_platform_settings({"mismatch_alerts_enabled": False})
+        runtime.telegram.send_message(
+            chat_id, "<b>Notifications:</b> off\nMismatch alerts have been closed/turned off."
+        )
+        return
+    if lower_text in {
+        "open notification",
+        "open notifications",
+        "turn on notification",
+        "turn on notifications",
+        "enable notification",
+        "enable notifications",
+        "unmute notification",
+        "unmute notifications",
+        "notifications on",
+        "notification on",
+    }:
+        configured_admin = str(runtime.settings.telegram_admin_chat_id or "")
+        private_chat = message["chat"].get("type", "private") == "private"
+        sender_id = str(message.get("from", {}).get("id", chat_id))
+        if not configured_admin or not private_chat or chat_id != configured_admin or sender_id != chat_id:
+            runtime.telegram.send_message(
+                chat_id,
+                "Operational settings are managed by an administrator. You can still use all public bot features.",
+            )
+            return
+        runtime.repository.set_platform_settings({"mismatch_alerts_enabled": True})
+        runtime.telegram.send_message(
+            chat_id, "<b>Notifications:</b> on\nMismatch alerts have been opened/turned on."
         )
         return
     if command in {"/notifications", "/email_limit", "/email-limit", "/week"}:
@@ -668,7 +722,12 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
         if not case or str(case.get("owner_chat_id") or chat_id) != chat_id:
             runtime.telegram.send_message(chat_id, "That case is not available in this chat.")
             return
-        runtime.telegram.send_message(chat_id, runtime.explainer.explain(case, parts[2]))
+        progress = runtime.telegram.send_message(chat_id, "⏳ <i>Analyzing case with Gemini AI...</i>")
+        answer = runtime.explainer.explain(case, parts[2])
+        try:
+            runtime.telegram.edit_message_text(chat_id, progress.get("message_id", 0), answer)
+        except Exception:
+            runtime.telegram.send_message(chat_id, answer)
         return
     if text.startswith("/newcase"):
         token = secrets.token_urlsafe(6).replace("-", "").replace("_", "")
@@ -741,10 +800,15 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
         if not case or str(case.get("owner_chat_id")) != chat_id:
             runtime.telegram.send_message(chat_id, "That case is not available in this chat.")
             return
+        progress = runtime.telegram.send_message(chat_id, "⏳ <i>Retrieving case evidence & analyzing...</i>")
         answer = runtime.explainer.explain(case, text)
-        runtime.telegram.send_message(chat_id, answer)
+        try:
+            runtime.telegram.edit_message_text(chat_id, progress.get("message_id", 0), answer)
+        except Exception:
+            runtime.telegram.send_message(chat_id, answer)
         return
     if text:
+        progress = runtime.telegram.send_message(chat_id, "💭 <i>Thinking...</i>")
         try:
             answer = runtime.explainer.assist(text)
         except Exception:
@@ -755,7 +819,10 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
                 "• Upload documents with caption <code>#TOKEN</code>, then send <code>/submit TOKEN</code>.\n"
                 "• Or ask a question about an existing case by mentioning its ID (e.g. <code>case-18e47...</code>)."
             )
-        runtime.telegram.send_message(chat_id, answer)
+        try:
+            runtime.telegram.edit_message_text(chat_id, progress.get("message_id", 0), answer)
+        except Exception:
+            runtime.telegram.send_message(chat_id, answer)
 
 
 def _handle_callback(runtime: Runtime, callback: dict[str, Any]) -> None:

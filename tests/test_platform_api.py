@@ -175,3 +175,36 @@ def test_stale_gmail_decline_is_rejected(runtime):
     )
     assert response.status_code == 409
     assert runtime.gmail.drafts == {}
+
+
+def test_telegram_plain_text_notification_control(runtime):
+    runtime.settings.telegram_admin_chat_id = "42"
+    client = TestClient(create_app(runtime))
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "webhook-secret"}
+
+    # Non-admin plain text attempt
+    client.post(
+        "/api/telegram-webhook",
+        json={"message": {"chat": {"id": 7}, "from": {"id": 7}, "text": "close notification"}},
+        headers=headers,
+    )
+    assert runtime.repository.get_platform_settings()["mismatch_alerts_enabled"] is True
+    assert "Operational settings are managed by an administrator" in runtime.telegram.messages[-1][1]
+
+    # Admin plain text attempt: close
+    client.post(
+        "/api/telegram-webhook",
+        json={"message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "close notification"}},
+        headers=headers,
+    )
+    assert runtime.repository.get_platform_settings()["mismatch_alerts_enabled"] is False
+    assert "Notifications:</b> off" in runtime.telegram.messages[-1][1]
+
+    # Admin plain text attempt: open
+    client.post(
+        "/api/telegram-webhook",
+        json={"message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "open notification"}},
+        headers=headers,
+    )
+    assert runtime.repository.get_platform_settings()["mismatch_alerts_enabled"] is True
+    assert "Notifications:</b> on" in runtime.telegram.messages[-1][1]
