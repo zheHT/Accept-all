@@ -5,6 +5,7 @@ import inspect
 from typing import Any, Protocol
 
 from backend.core.blob_store import BlobStore
+from backend.core.category_workflows import build_default_workflow_state
 from backend.core.documents import extract_text
 from backend.core.inference import ModelRouter, ModelRoutingError
 from backend.core.repository import CaseRepository
@@ -27,10 +28,14 @@ from backend.extraction.schemas import ExtractedDocument
 
 class ReviewNotifier(Protocol):
     def send_review_alert(self, case: dict[str, Any]) -> None: ...
+    def send_spam_alert(self, case: dict[str, Any]) -> None: ...
 
 
 class NullNotifier:
     def send_review_alert(self, case: dict[str, Any]) -> None:
+        del case
+
+    def send_spam_alert(self, case: dict[str, Any]) -> None:
         del case
 
 
@@ -160,6 +165,9 @@ class CaseProcessor:
                 "assumptions": [],
             }
 
+        if "workflow_state" not in changes and case.get("workflow_state") is None:
+            changes["workflow_state"] = build_default_workflow_state({"category": changes.get("category")})
+
         completed = self.repository.complete_case(case_id, changes)
         self.repository.append_event(case_id, "processing_completed", changes)
         if completed["result"]["status"] in {
@@ -167,6 +175,9 @@ class CaseProcessor:
             ResultStatus.NEEDS_REVIEW.value,
         }:
             self.notifier.send_review_alert(completed)
+        elif completed.get("category") == EmailCategory.SPAM.value:
+            if hasattr(self.notifier, "send_spam_alert"):
+                self.notifier.send_spam_alert(completed)
         return completed
 
     def _hybrid_validate(

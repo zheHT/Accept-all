@@ -11,7 +11,6 @@ from google.auth.exceptions import RefreshError
 from backend.core.config import get_settings
 from backend.core.processing import CaseProcessor
 from backend.core.runtime import Runtime, build_runtime
-from backend.integrations.knowledge import secure_knowledge_publisher
 from backend.worker.auth import require_worker_auth
 from backend.worker.gmail_ingest import process_gmail_notification, reconcile_recent_gmail
 
@@ -43,7 +42,6 @@ def _pubsub_data(envelope: dict[str, Any]) -> dict[str, Any]:
 
 def create_app(runtime: Runtime | None = None) -> FastAPI:
     runtime = runtime or build_runtime(get_settings())
-    secure_knowledge_publisher(runtime)
     processor = CaseProcessor(
         runtime.repository,
         runtime.blobs,
@@ -51,7 +49,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         lease_seconds=runtime.settings.processing_lease_seconds,
         notifier=runtime.notifier,
     )
-    app = FastAPI(title="ClassAll Worker", version="0.1.0")
+    app = FastAPI(title="ShipVerify Worker", version="0.1.0")
     app.state.runtime = runtime
 
     @app.get("/healthz")

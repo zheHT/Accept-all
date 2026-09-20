@@ -1,1 +1,1 @@
-"""Private ClassAll worker service."""
+"""Private ShipVerify worker service."""

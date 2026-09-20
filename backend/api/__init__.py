@@ -1,1 +1,1 @@
-"""Public ClassAll API service."""
+"""Public ShipVerify API service."""

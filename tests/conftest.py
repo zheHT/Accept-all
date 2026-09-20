@@ -53,6 +53,9 @@ class FakeNotifier:
     def send_review_alert(self, case):
         self.cases.append(case)
 
+    def send_spam_alert(self, case):
+        self.cases.append(case)
+
 
 class FakeGmail(GmailClient):
     def __init__(self) -> None:
@@ -124,8 +127,6 @@ def runtime(tmp_path: Path) -> Runtime:
     knowledge_publisher = KnowledgePublisher(
         repository=repository,
         explainer=explainer,
-        settings=settings,
-        local_dir=tmp_path / "knowledge_base",
     )
     return Runtime(
         settings=settings,

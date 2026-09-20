@@ -6,6 +6,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from backend.core.category_workflows import (
+    build_default_workflow_state,
+    compute_available_actions,
+)
+
 VERIFIED_FIELDS = (
     ("shipper", "Shipper"),
     ("consignee", "Consignee"),
@@ -75,12 +80,26 @@ def _public_document(document: dict[str, Any]) -> dict[str, Any]:
 
 def _field(extraction: dict[str, Any], field: str) -> dict[str, Any]:
     internal = "gross_weight_kg" if field == "gross_weight" else field
-    value = ((extraction.get("fields") or {}).get(internal) or {})
+    raw = (extraction.get("fields") or {}).get(internal)
+    if isinstance(raw, dict):
+        return {
+            "value": raw.get("value"),
+            "confidence": raw.get("confidence"),
+            "unit": raw.get("unit"),
+            "evidence": raw.get("evidence"),
+        }
+    if raw is not None:
+        return {
+            "value": raw,
+            "confidence": 1.0,
+            "unit": "kg" if internal == "gross_weight_kg" else None,
+            "evidence": None,
+        }
     return {
-        "value": value.get("value"),
-        "confidence": value.get("confidence"),
-        "unit": value.get("unit"),
-        "evidence": value.get("evidence"),
+        "value": None,
+        "confidence": None,
+        "unit": None,
+        "evidence": None,
     }
 
 
@@ -140,12 +159,17 @@ def build_case_summary(case: dict[str, Any]) -> dict[str, Any]:
             confidence_val = 0.96
         else:
             confidence_val = 0.85
+    workflow_state = case.get("workflow_state") or build_default_workflow_state(case)
+    is_blocked = bool(case.get("is_blocked"))
+    available_actions = compute_available_actions(case, is_blocked=is_blocked)
     return {
         "case_id": case.get("case_id"),
         "source_type": case.get("source_type"),
         "source_message_id": case.get("source_message_id"),
         "sender": case.get("sender", ""),
         "subject": case.get("subject", ""),
+        "body": case.get("body", ""),
+        "html_body": case.get("html_body"),
         "received_at": case.get("received_at"),
         "created_at": case.get("created_at"),
         "updated_at": case.get("updated_at"),
@@ -162,6 +186,10 @@ def build_case_summary(case: dict[str, Any]) -> dict[str, Any]:
         "draft_state": case.get("draft_state"),
         "unresolved_fields": unresolved,
         "review_progress": {"total": len(required), "completed": len(required) - len(unresolved)},
+        "workflow_state": workflow_state,
+        "available_actions": available_actions,
+        "is_sender_blocked": is_blocked,
+        "assigned_team": workflow_state.get("assigned_team") or case.get("assigned_team"),
     }
 
 
@@ -180,6 +208,7 @@ def build_case_detail(case: dict[str, Any], documents: list[dict[str, Any]]) -> 
     return {
         **summary,
         "body": case.get("body", ""),
+        "html_body": case.get("html_body"),
         "recipients": case.get("recipients", []),
         "rationale": case.get("rationale", ""),
         "assumptions": case.get("assumptions", []),
@@ -209,6 +238,7 @@ def build_case_detail(case: dict[str, Any], documents: list[dict[str, Any]]) -> 
             or case.get("draft_body")
             else None
         ),
+        "si_artifact": case.get("si_artifact") or (summary.get("workflow_state") or {}).get("si_artifact"),
     }
 
 
@@ -229,21 +259,69 @@ def required_review_fields(case: dict[str, Any], comparisons: list[dict[str, Any
     return [field for field, _ in VERIFIED_FIELDS if field in required]
 
 
-def dashboard_view(cases: list[dict[str, Any]], period: str) -> dict[str, Any]:
-    now = datetime.now(ZoneInfo("Asia/Kuala_Lumpur"))
+def dashboard_view(
+    cases: list[dict[str, Any]], period: str, now: datetime | None = None
+) -> dict[str, Any]:
+    tz = ZoneInfo("Asia/Kuala_Lumpur")
+    current_time = (now or datetime.now(tz)).astimezone(tz)
     if period == "day":
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        prev_start = start - timedelta(days=1)
+        prev_end = start
     elif period == "week":
-        start = (now - timedelta(days=now.weekday())).replace(
+        start = (current_time - timedelta(days=current_time.weekday())).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
+        prev_start = start - timedelta(days=7)
+        prev_end = start
     else:
-        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        start = current_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        prev_end = start
+        prev_start = (start - timedelta(days=1)).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+
+    start_utc = start.astimezone(UTC)
+    prev_start_utc = prev_start.astimezone(UTC)
+    prev_end_utc = prev_end.astimezone(UTC)
+
     selected = [
         case
         for case in cases
-        if _as_datetime(case.get("created_at")) >= start.astimezone(UTC)
+        if _as_datetime(case.get("created_at")) >= start_utc
     ]
+    previous = [
+        case
+        for case in cases
+        if prev_start_utc <= _as_datetime(case.get("created_at")) < prev_end_utc
+    ]
+
+    curr_total = len(selected)
+    prev_total = len(previous)
+    if prev_total == 0:
+        delta_pct = 100 if curr_total > 0 else 0
+    else:
+        delta_pct = round(((curr_total - prev_total) / prev_total) * 100)
+
+    durations = [
+        (_as_datetime(case["updated_at"]) - _as_datetime(case["created_at"])).total_seconds()
+        for case in selected
+        if case.get("created_at")
+        and case.get("updated_at")
+        and case.get("processing_state") not in {"DRAFT", "QUEUED", "PROCESSING"}
+    ]
+    positive_durations = [d for d in durations if d > 0]
+    if positive_durations:
+        avg_sec = sum(positive_durations) / len(positive_durations)
+        if avg_sec < 60:
+            avg_turnaround = f"{avg_sec:.1f}s"
+        elif avg_sec < 3600:
+            avg_turnaround = f"{int(avg_sec // 60)}m {int(avg_sec % 60)}s"
+        else:
+            avg_turnaround = f"{avg_sec / 3600:.1f}h"
+    else:
+        avg_turnaround = "Live"
+
     statuses = [(case.get("result") or {}).get("status") for case in selected]
     unresolved = [
         case
@@ -261,12 +339,15 @@ def dashboard_view(cases: list[dict[str, Any]], period: str) -> dict[str, Any]:
         "timezone": "Asia/Kuala_Lumpur",
         "generated_at": datetime.now(UTC).isoformat(),
         "metrics": {
-            "total": len(selected),
+            "total": curr_total,
             "matches": statuses.count("OK"),
             "mismatches": statuses.count("MISMATCH"),
             "needs_review": statuses.count("NEEDS_REVIEW"),
             "processing": len(processing),
             "unresolved": len(unresolved),
+            "previous_total": prev_total,
+            "delta_pct": delta_pct,
+            "avg_turnaround": avg_turnaround,
         },
         "attention_items": [build_case_summary(case) for case in unresolved[:10]],
         "recent_items": [build_case_summary(case) for case in selected[:10]],

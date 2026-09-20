@@ -4,13 +4,26 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
+  Ban,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Download,
   ExternalLink,
+  FileStack,
   FileText,
+  Loader,
   Mail,
   Paperclip,
+  Receipt,
   ScanLine,
   ScanSearch,
+  Send,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
+  Users,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -24,31 +37,65 @@ import {
   type InboxEmail,
   type MailAttachment,
 } from "@/lib/inbox-data";
-import { getCase } from "@/lib/api";
-import { reviewDetail } from "@/lib/live-view-models";
+import {
+  getCase,
+  getDocumentContent,
+  getDocumentDownload,
+  generateSI,
+  verifySI,
+  approveSI,
+  returnSI,
+  routeCase,
+  draftCategoryResponse,
+  completeCategoryCase,
+  blockSender,
+  markNotSpam,
+  type CaseDetail,
+} from "@/lib/api";
+import { reviewDetail, inboxDetail, bytesLabel } from "@/lib/live-view-models";
 import type { DocumentEvidence, ReviewCase } from "@/lib/review-data";
 
 /**
  * Email detail view.
  *
- * Shows the raw email plus what the classification agent concluded. Only
- * document-comparison emails expose the verification hand-off; the SI vs BL
- * field comparison itself lives on the Verification Case page.
+ * Shows the raw email plus what the classification agent concluded.
+ * Includes interactive category workflows for:
+ * - Document Comparison: SI vs BL verification hand-off
+ * - New SI Request: SI generation (.txt), verification, approval, return to requester
+ * - Invoice Query: Route to Finance, draft response, completion
+ * - General: Route to Customer Service, draft response, completion
+ * - Spam: Block sender (DB + Gmail filter) or Mark Not Spam
  */
 export function EmailDrawer({
   email,
   onClose,
+  onEmailUpdated,
 }: {
   email: InboxEmail | null;
   onClose: () => void;
+  onEmailUpdated?: (email: InboxEmail) => void;
 }) {
   const router = useRouter();
   const toast = useToast();
+  const [currentEmail, setCurrentEmail] = useState<InboxEmail | null>(email);
   const [preview, setPreview] = useState<PreviewDocument | null>(null);
   const [comparisonCase, setComparisonCase] = useState<ReviewCase | null>(null);
   const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [showFieldsPreview, setShowFieldsPreview] = useState(false);
+  const [customResponse, setCustomResponse] = useState("");
+  const [resolutionNote, setResolutionNote] = useState("");
+
   useEffect(() => {
-    if (!email) return;
+    setCurrentEmail(email);
+    setCustomResponse("");
+    setResolutionNote("");
+    setShowFieldsPreview(false);
+  }, [email]);
+
+  useEffect(() => {
+    if (!currentEmail) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -61,32 +108,87 @@ export function EmailDrawer({
       document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
     };
-  }, [email, onClose]);
+  }, [currentEmail, onClose]);
+
+  const handleAction = async (
+    actionKey: string,
+    apiCall: () => Promise<CaseDetail>,
+    successTitle: string,
+    successDescription: string,
+  ) => {
+    if (!currentEmail) return;
+    setActionLoading(actionKey);
+    try {
+      const detail = await apiCall();
+      const updated = inboxDetail(detail);
+      setCurrentEmail(updated);
+      onEmailUpdated?.(updated);
+      toast({ title: successTitle, description: successDescription, tone: "success" });
+    } catch (err) {
+      toast({
+        title: "Action failed",
+        description: err instanceof Error ? err.message : "Please retry.",
+        tone: "warning",
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDownloadSI = async (docId: string, filename: string) => {
+    if (!currentEmail) return;
+    setDownloading(true);
+    try {
+      const { blob } = await getDocumentContent(currentEmail.id, docId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({ title: "SI Artifact downloaded", description: `${filename} saved.`, tone: "success" });
+    } catch (err) {
+      try {
+        const { url } = await getDocumentDownload(currentEmail.id, docId);
+        window.open(url, "_blank");
+      } catch {
+        toast({
+          title: "Download failed",
+          description: err instanceof Error ? err.message : "Could not retrieve file.",
+          tone: "warning",
+        });
+      }
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   /** Opens the shared document comparison workspace; SI/BL render from the linked case. */
   const openAttachment = useCallback(
     (file: MailAttachment) => {
-      if (!email) return;
-      if (email.caseRef) {
+      if (!currentEmail) return;
+      if (currentEmail.caseRef) {
         void openComparison();
         return;
       }
-      const siAtt = email.attachments.find((a) => a.role === "SI") || file;
-      const blAtt = email.attachments.find((a) => a.role === "BL" && a.name !== siAtt.name);
-      const bodySi = (siAtt.preview ? { lines: siAtt.preview, problemLines: [] } : null) ?? pendingDocumentBody(siAtt.name, email.sender);
-      const bodyBl = blAtt ? ((blAtt.preview ? { lines: blAtt.preview, problemLines: [] } : null) ?? pendingDocumentBody(blAtt.name, email.sender)) : null;
+      const siAtt = currentEmail.attachments.find((a) => a.role === "SI") || file;
+      const blAtt = currentEmail.attachments.find((a) => a.role === "BL" && a.name !== siAtt.name);
+      const bodySi = (siAtt.preview ? { lines: siAtt.preview, problemLines: [] } : null) ?? pendingDocumentBody(siAtt.name, currentEmail.sender);
+      const bodyBl = blAtt ? ((blAtt.preview ? { lines: blAtt.preview, problemLines: [] } : null) ?? pendingDocumentBody(blAtt.name, currentEmail.sender)) : null;
 
       setComparisonCase({
-        id: email.id,
-        caseId: email.id,
-        shipment: email.shipment || email.subject || "Email Attachment",
+        id: currentEmail.id,
+        caseId: currentEmail.id,
+        shipment: currentEmail.shipment || currentEmail.subject || "Email Attachment",
         problemField: "Source documents",
         reason: "Inbox attachment preview",
         reasonCode: "low_confidence",
         reasonDetail: "Email attachment inspection",
-        confidence: email.confidence,
+        confidence: currentEmail.confidence,
         status: "pending",
-        created: email.receivedTime,
+        created: currentEmail.receivedTime,
         createdOrder: 0,
         si: {
           name: siAtt.name,
@@ -113,48 +215,48 @@ export function EmailDrawer({
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [email],
+    [currentEmail],
   );
 
   /** `?email=<id>&doc=SI` opens straight into a document, for sharing a link. */
   useEffect(() => {
-    if (!email) return;
+    if (!currentEmail) return;
     const requested = new URLSearchParams(window.location.search).get("doc");
     if (!requested) return;
-    const file = email.attachments.find(
+    const file = currentEmail.attachments.find(
       (attachment) => attachment.role.toLowerCase() === requested.toLowerCase(),
     );
     if (file) openAttachment(file);
-  }, [email, openAttachment]);
+  }, [currentEmail, openAttachment]);
 
-  if (!email) return null;
+  if (!currentEmail) return null;
 
-  const currentClassification = email.classification;
-  const currentConfidence = email.confidence;
-  const currentReasoning = email.classificationNote;
+  const currentClassification = currentEmail.classification;
+  const currentConfidence = currentEmail.confidence;
+  const currentReasoning = currentEmail.classificationNote;
   const meta = CLASSIFICATION_META[currentClassification];
-  const si = email.attachments.find((file) => file.role === "SI");
-  const bl = email.attachments.find((file) => file.role === "BL");
+  const si = currentEmail.attachments.find((file) => file.role === "SI");
+  const bl = currentEmail.attachments.find((file) => file.role === "BL");
 
   /** Hands off to the verification workflow and opens the case's comparison report. */
   const openVerificationCase = () => {
     toast({
-      title: email.caseRef
-        ? `Opening verification case #${email.caseRef}`
+      title: currentEmail.caseRef
+        ? `Opening verification case #${currentEmail.caseRef}`
         : "Opening verification cases",
-      description: email.shipment
-        ? `${email.shipment} — SI vs BL comparison of the 7 required fields.`
+      description: currentEmail.shipment
+        ? `${currentEmail.shipment} — SI vs BL comparison of the 7 required fields.`
         : "SI vs BL comparison of the 7 required fields.",
       tone: "info",
     });
     onClose();
-    router.push(email.caseRef ? `/cases?case=${email.caseRef}` : "/cases");
+    router.push(currentEmail.caseRef ? `/cases?case=${currentEmail.caseRef}` : "/cases");
   };
 
   const openComparison = async () => {
-    if (!email?.caseRef) {
-      if (email?.attachments.length) {
-        openAttachment(email.attachments[0]);
+    if (!currentEmail?.caseRef) {
+      if (currentEmail?.attachments.length) {
+        openAttachment(currentEmail.attachments[0]);
         return;
       }
       toast({ title: "Verification case is not ready", description: "Open the case after extraction finishes.", tone: "warning" });
@@ -162,7 +264,7 @@ export function EmailDrawer({
     }
     setComparisonLoading(true);
     try {
-      const detail = await getCase(email.caseRef);
+      const detail = await getCase(currentEmail.caseRef);
       setComparisonCase(reviewDetail(detail));
     } catch (error) {
       toast({ title: "Document comparison is unavailable", description: error instanceof Error ? error.message : "Please retry.", tone: "warning" });
@@ -170,6 +272,8 @@ export function EmailDrawer({
       setComparisonLoading(false);
     }
   };
+
+  const stage = currentEmail.workflowState?.stage || "INITIAL";
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -183,17 +287,29 @@ export function EmailDrawer({
       <section
         role="dialog"
         aria-modal="true"
-        aria-label={`Email: ${email.subject}`}
-        className="relative flex h-full w-full max-w-[620px] animate-[drawer-in_0.28s_cubic-bezier(0.22,1,0.36,1)] flex-col border-l border-edge bg-surface/95 shadow-glass-lg backdrop-blur-2xl backdrop-saturate-150"
+        aria-label={`Email: ${currentEmail.subject}`}
+        className="relative flex h-full w-full max-w-[640px] animate-[drawer-in_0.28s_cubic-bezier(0.22,1,0.36,1)] flex-col border-l border-edge bg-surface/95 shadow-glass-lg backdrop-blur-2xl backdrop-saturate-150"
       >
         <header className="flex items-start gap-4 border-b border-line px-6 py-5">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <ClassificationBadge classification={currentClassification} />
-              <EmailStatusBadge status={email.status} />
+              <EmailStatusBadge status={currentEmail.status} />
+              {currentEmail.assignedTeam && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-surface px-2 py-0.5 text-[11px] font-medium text-ink-700 ring-1 ring-inset ring-line">
+                  <Users className="size-3 text-ink-400" />
+                  {currentEmail.assignedTeam}
+                </span>
+              )}
+              {currentEmail.isSenderBlocked && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-failed-50 px-2 py-0.5 text-[11px] font-semibold text-failed-700 ring-1 ring-inset ring-failed-200">
+                  <Ban className="size-3 text-failed-500" />
+                  Sender Blocked
+                </span>
+              )}
             </div>
             <h2 className="mt-3 text-[18px] font-semibold leading-snug tracking-tight text-ink-900">
-              {email.subject}
+              {currentEmail.subject}
             </h2>
           </div>
           <button
@@ -209,21 +325,21 @@ export function EmailDrawer({
         <div className="flex-1 overflow-y-auto px-6 py-6">
           <dl className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-xl border border-edge bg-surface/60 p-4">
             <Meta label="From">
-              <span className="block font-medium text-ink-900">{email.sender}</span>
-              <span className="block truncate text-[12px] text-ink-400">{email.senderEmail}</span>
+              <span className="block font-medium text-ink-900">{currentEmail.sender}</span>
+              <span className="block truncate text-[12px] text-ink-400">{currentEmail.senderEmail}</span>
             </Meta>
             <Meta label="To">
-              <span className="block truncate font-medium text-ink-900">{email.recipient}</span>
+              <span className="block truncate font-medium text-ink-900">{currentEmail.recipient}</span>
             </Meta>
             <Meta label="Received">
-              <span className="block font-medium text-ink-900">{email.receivedLabel}</span>
+              <span className="block font-medium text-ink-900">{currentEmail.receivedLabel}</span>
             </Meta>
             <Meta label="Attachments">
               <span className="flex items-center gap-1.5 font-medium text-ink-900">
                 <Paperclip className="size-3.5 text-ink-400" strokeWidth={2} />
-                {email.attachments.length === 0
+                {currentEmail.attachments.length === 0
                   ? "None"
-                  : `${email.attachments.length} file${email.attachments.length === 1 ? "" : "s"}`}
+                  : `${currentEmail.attachments.length} file${currentEmail.attachments.length === 1 ? "" : "s"}`}
               </span>
             </Meta>
           </dl>
@@ -259,7 +375,8 @@ export function EmailDrawer({
             </p>
           </section>
 
-          {meta.verifiable ? (
+          {/* 1. DOCUMENT COMPARISON SECTION */}
+          {meta.verifiable && (
             <section className="mt-5 rounded-xl border border-brand-200 bg-gradient-to-br from-brand-50 via-surface to-brand-50/60 p-4 shadow-glass">
               <div className="flex items-start gap-3">
                 <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-brand">
@@ -271,7 +388,7 @@ export function EmailDrawer({
                   </h3>
                   <p className="mt-1 text-[12.5px] leading-relaxed text-ink-500">
                     Shipping Instruction and draft Bill of Lading identified
-                    {email.shipment ? ` for ${email.shipment}` : ""}. Ready for field-by-field
+                    {currentEmail.shipment ? ` for ${currentEmail.shipment}` : ""}. Ready for field-by-field
                     comparison of the 7 required fields.
                   </p>
                 </div>
@@ -288,9 +405,9 @@ export function EmailDrawer({
                 className="btn-primary mt-4 w-full justify-center"
               >
                 Open Verification Case
-                {email.caseRef && (
+                {currentEmail.caseRef && (
                   <span className="font-mono text-[12px] font-medium opacity-80">
-                    #{email.caseRef}
+                    #{currentEmail.caseRef}
                   </span>
                 )}
                 <ArrowRight className="size-4" strokeWidth={2.25} />
@@ -305,50 +422,412 @@ export function EmailDrawer({
                 {comparisonLoading ? "Loading documents…" : "Compare source documents"}
               </button>
             </section>
-          ) : (
-            <section className="mt-5 rounded-xl border border-line bg-surface/50 p-4">
+          )}
+
+          {/* 2. NEW SI REQUEST WORKFLOW SECTION */}
+          {currentClassification === "new_si" && (
+            <section className="mt-5 rounded-xl border border-brand-200 bg-gradient-to-br from-brand-50/70 via-surface to-brand-50/40 p-4 shadow-glass">
               <div className="flex items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-surface text-ink-400 ring-1 ring-inset ring-line">
-                  <Mail className="size-[18px]" strokeWidth={2} />
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-brand">
+                  <FileStack className="size-[18px]" strokeWidth={2.25} />
                 </span>
-                <div>
-                  <h3 className="text-[14px] font-semibold text-ink-900">
-                    No document verification required
-                  </h3>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-[14px] font-semibold text-ink-900">
+                      Shipping Instruction Pipeline
+                    </h3>
+                    <span className="rounded-md bg-brand-100/70 px-2 py-0.5 font-mono text-[11px] font-semibold text-brand-700">
+                      {stage}
+                    </span>
+                  </div>
                   <p className="mt-1 text-[12.5px] leading-relaxed text-ink-500">
-                    Classified as {meta.label.toLowerCase()} and stored for audit. SI vs BL
-                    comparison does not apply to this email.
+                    Extract structured fields, generate SI plain text (.txt) artifact, verify operational parameters, approve, and return to requester.
                   </p>
                 </div>
               </div>
 
-              {email.attachments.length > 0 && (
-                <ul className="mt-4 flex flex-col gap-2">
-                  {email.attachments.map((file) => (
-                    <li key={file.name}>
+              {/* SI Artifact Display */}
+              {currentEmail.siArtifact && (
+                <div className="mt-4 rounded-xl border border-brand-200/80 bg-surface/80 p-3 shadow-glass">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <FileText className="size-4 text-brand-600 shrink-0" />
+                      <div className="min-w-0">
+                        <span className="block font-mono text-[12px] font-semibold text-ink-900 truncate">
+                          {currentEmail.siArtifact.filename}
+                        </span>
+                        <span className="block text-[11px] text-ink-400">
+                          {bytesLabel(currentEmail.siArtifact.size_bytes)} · Generated SI Plain Text
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadSI(currentEmail.siArtifact!.document_id, currentEmail.siArtifact!.filename)}
+                      disabled={downloading}
+                      className="btn-glass px-2.5 py-1 text-[11.5px] shrink-0"
+                    >
+                      {downloading ? <Loader className="size-3 animate-spin" /> : <Download className="size-3" />}
+                      Download .txt
+                    </button>
+                  </div>
+
+                  {currentEmail.siArtifact.fields && (
+                    <div className="mt-3 border-t border-line pt-2">
                       <button
                         type="button"
-                        onClick={() => openAttachment(file)}
-                        className="flex w-full items-center gap-3 rounded-lg border border-line bg-surface/70 px-3 py-2 text-left transition-colors hover:border-brand-200 hover:bg-surface"
+                        onClick={() => setShowFieldsPreview(!showFieldsPreview)}
+                        className="flex items-center justify-between w-full text-[11.5px] font-medium text-ink-500 hover:text-ink-900"
                       >
-                        <FileText className="size-4 text-ink-400" strokeWidth={2} />
-                        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink-700">
-                          {file.name}
-                        </span>
-                        <span className="tabular text-[11px] text-ink-400">{file.sizeLabel}</span>
-                        <ExternalLink className="size-3.5 shrink-0 text-ink-400" strokeWidth={2} />
+                        <span>View Extracted SI Fields ({Object.keys(currentEmail.siArtifact.fields).length})</span>
+                        {showFieldsPreview ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
                       </button>
-                    </li>
-                  ))}
-                </ul>
+                      {showFieldsPreview && (
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] bg-surface/90 rounded-lg p-2.5 border border-line">
+                          {Object.entries(currentEmail.siArtifact.fields).map(([k, v]) => (
+                            <div key={k} className="min-w-0">
+                              <span className="block uppercase text-ink-400 font-semibold tracking-wider text-[10px]">{k.replace(/_/g, " ")}</span>
+                              <span className="block font-medium text-ink-800 truncate">{String(v || "—")}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
+
+              {/* Action Buttons for SI */}
+              <div className="mt-4 flex flex-col gap-2">
+                {!currentEmail.siArtifact && (
+                  <button
+                    type="button"
+                    onClick={() => handleAction("generate-si", () => generateSI(currentEmail.id, currentEmail.version), "SI Generated", "Extracted fields and created SI text document.")}
+                    disabled={actionLoading !== null}
+                    className="btn-primary w-full justify-center"
+                  >
+                    {actionLoading === "generate-si" ? <Loader className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                    Generate SI Document (.txt)
+                  </button>
+                )}
+
+                {currentEmail.siArtifact && !currentEmail.workflowState?.si_verified && (
+                  <button
+                    type="button"
+                    onClick={() => handleAction("verify-si", () => verifySI(currentEmail.id, currentEmail.version), "SI Verified", "Shipping instruction verified against operational parameters.")}
+                    disabled={actionLoading !== null}
+                    className="btn-primary w-full justify-center"
+                  >
+                    {actionLoading === "verify-si" ? <Loader className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+                    Verify SI Document
+                  </button>
+                )}
+
+                {currentEmail.workflowState?.si_verified && !currentEmail.workflowState?.si_approved && (
+                  <button
+                    type="button"
+                    onClick={() => handleAction("approve-si", () => approveSI(currentEmail.id, currentEmail.version), "SI Approved", "Shipping instruction approved for carrier transmission.")}
+                    disabled={actionLoading !== null}
+                    className="btn-primary w-full justify-center"
+                  >
+                    {actionLoading === "approve-si" ? <Loader className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                    Approve SI Document
+                  </button>
+                )}
+
+                {currentEmail.workflowState?.si_approved && !currentEmail.workflowState?.si_returned && (
+                  <button
+                    type="button"
+                    onClick={() => handleAction("return-si", () => returnSI(currentEmail.id, currentEmail.version), "SI Returned", "Created Gmail response draft with SI .txt attached.")}
+                    disabled={actionLoading !== null}
+                    className="btn-primary w-full justify-center"
+                  >
+                    {actionLoading === "return-si" ? <Loader className="size-4 animate-spin" /> : <Send className="size-4" />}
+                    Return SI to Requester (Attach .txt)
+                  </button>
+                )}
+
+                {currentEmail.workflowState?.si_returned && (
+                  <div className="flex items-center gap-2 rounded-xl border border-matched-200 bg-matched-50/90 p-3 text-[12.5px] font-medium text-matched-700">
+                    <CheckCircle2 className="size-4.5 text-matched-500 shrink-0" />
+                    <span>Shipping instruction completed and returned to requester with attached .txt.</span>
+                  </div>
+                )}
+              </div>
             </section>
+          )}
+
+          {/* 3. INVOICE QUERY WORKFLOW SECTION */}
+          {currentClassification === "invoice_query" && (
+            <section className="mt-5 rounded-xl border border-plum-200 bg-gradient-to-br from-plum-50/70 via-surface to-plum-50/40 p-4 shadow-glass">
+              <div className="flex items-start gap-3">
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-plum-500 to-plum-700 text-white shadow-brand">
+                  <Receipt className="size-[18px]" strokeWidth={2.25} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-[14px] font-semibold text-ink-900">
+                      Invoice & Billing Workflow
+                    </h3>
+                    <span className="rounded-md bg-plum-100/70 px-2 py-0.5 font-mono text-[11px] font-semibold text-plum-700">
+                      {stage}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-500">
+                    Route inquiry to the Accounts department, draft explanatory response, and resolve billing case.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-col gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleAction("route", () => routeCase(currentEmail.id, "Finance", currentEmail.version), "Routed", "Case assigned to Finance team.")}
+                    disabled={actionLoading !== null || currentEmail.assignedTeam === "Finance"}
+                    className={cn(
+                      "btn-glass text-[12px]",
+                      currentEmail.assignedTeam === "Finance" && "bg-plum-50 text-plum-700 border-plum-200"
+                    )}
+                  >
+                    <Users className="size-3.5" />
+                    {currentEmail.assignedTeam === "Finance" ? "Assigned to Finance" : "Route to Finance"}
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-edge bg-surface/70 p-3">
+                  <label className="block text-[11.5px] font-semibold text-ink-700 mb-1.5">
+                    Response Draft (Gmail Draft Lifecycle)
+                  </label>
+                  <textarea
+                    value={customResponse}
+                    onChange={(e) => setCustomResponse(e.target.value)}
+                    placeholder="Enter response notes for the customer regarding this billing query..."
+                    rows={3}
+                    className="field-glass p-2.5 text-[12.5px] mb-2"
+                  />
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleAction("draft-response", () => draftCategoryResponse(currentEmail.id, customResponse || "Thank you for reaching out regarding your invoice. Our accounts team has reviewed your inquiry and updated the statement.", currentEmail.version), "Draft Created", "Response email draft prepared in Gmail.")}
+                      disabled={actionLoading !== null}
+                      className="btn-primary text-[12px]"
+                    >
+                      {actionLoading === "draft-response" ? <Loader className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+                      Create Gmail Draft
+                    </button>
+                  </div>
+                </div>
+
+                {stage !== "COMPLETED" ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={resolutionNote}
+                      onChange={(e) => setResolutionNote(e.target.value)}
+                      placeholder="Optional completion note..."
+                      className="field-glass px-3 py-1.5 text-[12px] flex-1"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleAction("complete", () => completeCategoryCase(currentEmail.id, currentEmail.version, resolutionNote || "Invoice query reviewed and resolved."), "Case Completed", "Billing inquiry marked as completed.")}
+                      disabled={actionLoading !== null}
+                      className="btn-glass text-[12px] hover:border-matched-200 hover:text-matched-700 shrink-0"
+                    >
+                      {actionLoading === "complete" ? <Loader className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5 text-matched-600" />}
+                      Complete Case
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 rounded-xl border border-matched-200 bg-matched-50/90 p-3 text-[12.5px] font-medium text-matched-700">
+                    <CheckCircle2 className="size-4 text-matched-500 shrink-0" />
+                    <span>Inquiry resolved and completed.</span>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* 4. GENERAL MESSAGE WORKFLOW SECTION */}
+          {currentClassification === "general" && (
+            <section className="mt-5 rounded-xl border border-line bg-surface/70 p-4 shadow-glass">
+              <div className="flex items-start gap-3">
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-surface text-ink-700 ring-1 ring-inset ring-line">
+                  <Mail className="size-[18px]" strokeWidth={2} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-[14px] font-semibold text-ink-900">
+                      General Inquiry Workflow
+                    </h3>
+                    <span className="rounded-md bg-surface px-2 py-0.5 font-mono text-[11px] font-semibold text-ink-600 ring-1 ring-inset ring-line">
+                      {stage}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-500">
+                    Route message to Customer Service, draft response email, and mark resolved.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-col gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleAction("route", () => routeCase(currentEmail.id, "Customer Service", currentEmail.version), "Routed", "Assigned to Customer Service.")}
+                    disabled={actionLoading !== null || currentEmail.assignedTeam === "Customer Service"}
+                    className={cn(
+                      "btn-glass text-[12px]",
+                      currentEmail.assignedTeam === "Customer Service" && "bg-brand-50 text-brand-700 border-brand-200"
+                    )}
+                  >
+                    <Users className="size-3.5" />
+                    {currentEmail.assignedTeam === "Customer Service" ? "Assigned: Customer Service" : "Route to Customer Service"}
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-edge bg-surface/70 p-3">
+                  <label className="block text-[11.5px] font-semibold text-ink-700 mb-1.5">
+                    Customer Response Draft
+                  </label>
+                  <textarea
+                    value={customResponse}
+                    onChange={(e) => setCustomResponse(e.target.value)}
+                    placeholder="Enter reply message..."
+                    rows={3}
+                    className="field-glass p-2.5 text-[12.5px] mb-2"
+                  />
+                  <div className="flex items-center justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handleAction("draft-response", () => draftCategoryResponse(currentEmail.id, customResponse || "Thank you for reaching out. We have received your inquiry and our customer operations team is following up.", currentEmail.version), "Draft Created", "Draft response created in Gmail.")}
+                      disabled={actionLoading !== null}
+                      className="btn-primary text-[12px]"
+                    >
+                      {actionLoading === "draft-response" ? <Loader className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+                      Create Gmail Draft
+                    </button>
+                  </div>
+                </div>
+
+                {stage !== "COMPLETED" ? (
+                  <button
+                    type="button"
+                    onClick={() => handleAction("complete", () => completeCategoryCase(currentEmail.id, currentEmail.version, resolutionNote || "General inquiry addressed."), "Case Completed", "Inquiry marked as completed.")}
+                    disabled={actionLoading !== null}
+                    className="btn-glass justify-center text-[12.5px] hover:border-matched-200 hover:text-matched-700"
+                  >
+                    {actionLoading === "complete" ? <Loader className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5 text-matched-600" />}
+                    Complete Inquiry
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2 rounded-xl border border-matched-200 bg-matched-50/90 p-3 text-[12.5px] font-medium text-matched-700">
+                    <CheckCircle2 className="size-4 text-matched-500 shrink-0" />
+                    <span>Case resolved and marked completed.</span>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* 5. SPAM MODERATION WORKFLOW SECTION */}
+          {currentClassification === "spam" && (
+            <section className="mt-5 rounded-xl border border-failed-200 bg-gradient-to-br from-failed-50/70 via-surface to-failed-50/40 p-4 shadow-glass">
+              <div className="flex items-start gap-3">
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-failed-500 to-failed-700 text-white shadow-brand">
+                  <ShieldAlert className="size-[18px]" strokeWidth={2.25} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[14px] font-semibold text-ink-900">
+                    Spam Moderation & Ingestion Filter
+                  </h3>
+                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-500">
+                    Protect system intake by blocking suspicious senders across database and Gmail filter rules, or reclassify false positives.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-col gap-3">
+                {currentEmail.isSenderBlocked ? (
+                  <div className="rounded-xl border border-failed-200 bg-failed-50/90 p-3.5">
+                    <div className="flex items-center gap-2 font-semibold text-[13px] text-failed-700">
+                      <Ban className="size-4 shrink-0 text-failed-600" />
+                      <span>Sender is Permanently Blocked</span>
+                    </div>
+                    <p className="mt-1 text-[12px] text-failed-700/80 leading-relaxed">
+                      Emails from <strong className="font-mono">{currentEmail.senderEmail}</strong> are dropped during ingestion and marked in Gmail filter rules.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => handleAction("not-spam", () => markNotSpam(currentEmail.id, currentEmail.version), "Sender Unblocked", "Sender unblocked and case reclassified.")}
+                      disabled={actionLoading !== null}
+                      className="btn-glass mt-3 text-[12px]"
+                    >
+                      {actionLoading === "not-spam" ? <Loader className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                      Unblock & Mark as Not Spam
+                    </button>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-edge bg-surface/80 p-3.5">
+                    <div className="flex items-center gap-2 font-medium text-[12.5px] text-ink-800">
+                      <ShieldAlert className="size-4 text-failed-500" />
+                      <span>Sender is currently not blocked.</span>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleAction("block-sender", () => blockSender(currentEmail.id, currentEmail.version, "Blocked via inbox review"), "Sender Blocked", "Sender blocked in database and Gmail filter configured.")}
+                        disabled={actionLoading !== null}
+                        className="btn-glass text-[12px] text-failed-700 border-failed-200 hover:bg-failed-50"
+                      >
+                        {actionLoading === "block-sender" ? <Loader className="size-3.5 animate-spin" /> : <Ban className="size-3.5 text-failed-500" />}
+                        Block Sender
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAction("not-spam", () => markNotSpam(currentEmail.id, currentEmail.version), "Marked as Not Spam", "Case reclassified as general.")}
+                        disabled={actionLoading !== null}
+                        className="btn-glass text-[12px]"
+                      >
+                        {actionLoading === "not-spam" ? <Loader className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                        Mark as Not Spam
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* Non-comparison attachments */}
+          {!meta.verifiable && currentEmail.attachments.length > 0 && (
+            <div className="mt-5 rounded-xl border border-line bg-surface/50 p-4">
+              <p className="eyebrow mb-2">Attachments ({currentEmail.attachments.length})</p>
+              <ul className="flex flex-col gap-2">
+                {currentEmail.attachments.map((file) => (
+                  <li key={file.name}>
+                    <button
+                      type="button"
+                      onClick={() => openAttachment(file)}
+                      className="flex w-full items-center gap-3 rounded-lg border border-line bg-surface/70 px-3 py-2 text-left transition-colors hover:border-brand-200 hover:bg-surface"
+                    >
+                      <FileText className="size-4 text-ink-400" strokeWidth={2} />
+                      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink-700">
+                        {file.name}
+                      </span>
+                      <span className="tabular text-[11px] text-ink-400">{file.sizeLabel}</span>
+                      <ExternalLink className="size-3.5 shrink-0 text-ink-400" strokeWidth={2} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
 
           <section className="mt-6">
             <p className="eyebrow">Message</p>
             <div className="mt-3 flex flex-col gap-3 text-[13.5px] leading-relaxed text-ink-700">
-              {email.body.map((paragraph, index) => (
+              {currentEmail.body.map((paragraph, index) => (
                 <p key={index} className="whitespace-pre-line">
                   {paragraph}
                 </p>
@@ -356,16 +835,22 @@ export function EmailDrawer({
             </div>
           </section>
 
-          <Workflow email={email} />
+          <Workflow email={currentEmail} />
         </div>
 
         <footer className="flex items-center justify-between gap-3 border-t border-line bg-surface/60 px-6 py-4">
-          <span className="text-[12px] text-ink-400">
+          <span className="text-[12px] text-ink-400 truncate max-w-[340px]">
             {meta.verifiable
-              ? "Verification workflow available"
-              : "Classified — no verification workflow"}
+              ? "Verification workflow active"
+              : currentClassification === "new_si"
+                ? `SI Workflow · Stage: ${stage}`
+                : currentClassification === "invoice_query"
+                  ? `Billing Workflow · ${currentEmail.assignedTeam ? `Assigned to ${currentEmail.assignedTeam}` : "Unassigned"}`
+                  : currentClassification === "spam"
+                    ? (currentEmail.isSenderBlocked ? "Spam · Sender Blocked" : "Spam · Action Required")
+                    : `General Workflow · ${stage}`}
           </span>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button type="button" className="btn-glass" onClick={onClose}>
               Close
             </button>
@@ -387,7 +872,7 @@ export function EmailDrawer({
           problemField={comparisonCase.problemField}
           open
           onClose={() => setComparisonCase(null)}
-          heading={`Document comparison · ${email.shipment || email.id}`}
+          heading={`Document comparison · ${currentEmail.shipment || currentEmail.id}`}
         />
       )}
     </div>
@@ -453,41 +938,97 @@ function DocumentRow({
   );
 }
 
-/** Where this email sits in the intake workflow. */
+/** Where this email sits in the intake and category workflow. */
 function Workflow({ email }: { email: InboxEmail }) {
-  const verifiable = CLASSIFICATION_META[email.classification].verifiable;
+  const classification = email.classification;
+  const stage = email.workflowState?.stage || "INITIAL";
+  const isBlocked = email.isSenderBlocked;
 
-  const steps = verifiable
-    ? [
-        { label: "Incoming email", state: "done" as const },
-        {
-          label: "AI classification",
-          state: email.status === "processing" ? ("current" as const) : ("done" as const),
-        },
-        {
-          label: "Verification case",
-          state:
-            email.status === "completed"
-              ? ("done" as const)
-              : email.status === "processing"
-                ? ("todo" as const)
-                : ("current" as const),
-        },
-        {
-          label: "SI + BL comparison",
-          state: email.status === "completed" ? ("done" as const) : ("todo" as const),
-        },
-      ]
-    : [
-        { label: "Incoming email", state: "done" as const },
-        { label: "AI classification", state: "done" as const },
-        { label: email.status === "filtered" ? "Filtered" : "Classified", state: "done" as const },
-      ];
+  let steps: Array<{ label: string; state: "done" | "current" | "todo" }> = [];
+
+  if (classification === "document_comparison") {
+    steps = [
+      { label: "Incoming email", state: "done" },
+      {
+        label: "AI classification",
+        state: email.status === "processing" ? "current" : "done",
+      },
+      {
+        label: "Verification case",
+        state:
+          email.status === "completed"
+            ? "done"
+            : email.status === "processing"
+              ? "todo"
+              : "current",
+      },
+      {
+        label: "SI + BL comparison",
+        state: email.status === "completed" ? "done" : "todo",
+      },
+    ];
+  } else if (classification === "new_si") {
+    const isGenerated = !!email.siArtifact || stage !== "RECEIVED" && stage !== "INITIAL";
+    const isVerified = !!email.workflowState?.si_verified;
+    const isApproved = !!email.workflowState?.si_approved;
+    const isReturned = !!email.workflowState?.si_returned || stage === "RETURNED";
+
+    steps = [
+      { label: "Intake", state: "done" },
+      { label: "AI Classify", state: "done" },
+      {
+        label: "Generate SI",
+        state: isGenerated ? "done" : "current",
+      },
+      {
+        label: "Verify",
+        state: isVerified ? "done" : isGenerated ? "current" : "todo",
+      },
+      {
+        label: "Approve",
+        state: isApproved ? "done" : isVerified ? "current" : "todo",
+      },
+      {
+        label: "Return",
+        state: isReturned ? "done" : isApproved ? "current" : "todo",
+      },
+    ];
+  } else if (classification === "invoice_query" || classification === "general") {
+    const isRouted = !!email.assignedTeam || stage === "ROUTED" || stage === "DRAFTED" || stage === "COMPLETED";
+    const isDrafted = stage === "DRAFTED" || stage === "COMPLETED";
+    const isCompleted = stage === "COMPLETED";
+
+    steps = [
+      { label: "Intake", state: "done" },
+      { label: "AI Classify", state: "done" },
+      {
+        label: "Route Team",
+        state: isRouted ? "done" : "current",
+      },
+      {
+        label: "Draft Reply",
+        state: isDrafted ? "done" : isRouted ? "current" : "todo",
+      },
+      {
+        label: "Complete",
+        state: isCompleted ? "done" : isDrafted ? "current" : "todo",
+      },
+    ];
+  } else if (classification === "spam") {
+    steps = [
+      { label: "Intake", state: "done" },
+      { label: "AI Spam Flag", state: "done" },
+      {
+        label: isBlocked ? "Sender Blocked" : "Moderation",
+        state: isBlocked ? "done" : "current",
+      },
+    ];
+  }
 
   return (
     <section className="mt-6 rounded-xl border border-edge bg-surface/55 p-4">
-      <p className="eyebrow">Workflow</p>
-      <ol className="mt-3 flex items-center gap-1.5">
+      <p className="eyebrow">Workflow Lifecycle</p>
+      <ol className="mt-3 flex items-center gap-1.5 overflow-x-auto pb-1">
         {steps.map((step, index) => (
           <li key={step.label} className="flex min-w-0 flex-1 items-center gap-1.5">
             <span

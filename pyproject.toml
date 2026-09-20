@@ -1,5 +1,5 @@
 [project]
-name = "classall-bot"
+name = "shipverify"
 version = "0.1.0"
 description = "Dual-channel shipping document classification, extraction, validation, and human review"
 readme = "README.md"
