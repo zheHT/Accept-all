@@ -74,8 +74,8 @@ TELEGRAM_HELP_TEXT = (
 
 class TelegramClient:
     def __init__(self, token: str, timeout: float = 30.0) -> None:
-        self.token = token
-        self.base_url = f"https://api.telegram.org/bot{token}"
+        self.token = (token or "").strip()
+        self.base_url = f"https://api.telegram.org/bot{self.token}"
         self.timeout = timeout
 
     def _call(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
