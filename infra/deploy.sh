@@ -24,6 +24,14 @@ if [ -z "$PYTHON_BIN" ]; then
     exit 1
 fi
 
+run_firebase() {
+    if [ -n "${APPDATA:-}" ] && [ -f "${APPDATA}/npm/node_modules/firebase-tools/lib/bin/firebase.js" ]; then
+        node "${APPDATA}/npm/node_modules/firebase-tools/lib/bin/firebase.js" "$@"
+    else
+        firebase "$@"
+    fi
+}
+
 REQUIRED_SECRETS=(
     "grader-ingest-key"
     "app-signing-secret"
@@ -212,7 +220,7 @@ fi
 echo "Configuring and deploying Firebase..."
 APP_ID="${FIREBASE_WEB_APP_ID:-1:669899307969:web:d2e29d52006cdde8f48d40}"
 
-SDK_CONFIG=$(firebase apps:sdkconfig WEB "$APP_ID" --project "$PROJECT_ID" --json 2>/dev/null || true)
+SDK_CONFIG=$(run_firebase apps:sdkconfig WEB "$APP_ID" --project "$PROJECT_ID" --json 2>/dev/null || true)
 
 export NEXT_PUBLIC_API_URL="$API_URL"
 API_KEY=$(echo "$SDK_CONFIG" | grep '"apiKey"' | head -n 1 | sed -E 's/.*"apiKey": "([^"]+)".*/\1/' || true)
@@ -228,7 +236,7 @@ if [ ! -d "frontend/node_modules" ]; then
     npm ci --prefix frontend
 fi
 npm run build --prefix frontend
-firebase deploy --project "$PROJECT_ID" --only hosting,firestore:rules,firestore:indexes
+run_firebase deploy --project "$PROJECT_ID" --only hosting,firestore:rules,firestore:indexes
 
 echo ""
 echo "=========================================="
