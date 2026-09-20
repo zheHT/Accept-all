@@ -43,8 +43,8 @@ class LocalBlobStore:
 
 
 class GCSBlobStore:
-    def __init__(self, project: str, bucket: str) -> None:
-        self.client = storage.Client(project=project)
+    def __init__(self, project: str, bucket: str, credentials: Any = None) -> None:
+        self.client = storage.Client(project=project, credentials=credentials)
         self.bucket = self.client.bucket(bucket)
 
     def upload(self, object_name: str, data: bytes, content_type: str) -> str:
@@ -64,6 +64,35 @@ class GCSBlobStore:
         prefix = f"gs://{self.bucket.name}/"
         if not uri.startswith(prefix):
             raise ValueError("object is outside the configured bucket")
-        return self.bucket.blob(uri.removeprefix(prefix)).generate_signed_url(
-            version="v4", expiration=timedelta(minutes=minutes), method="GET"
-        )
+        object_name = uri.removeprefix(prefix)
+        blob = self.bucket.blob(object_name)
+        try:
+            return blob.generate_signed_url(
+                version="v4", expiration=timedelta(minutes=minutes), method="GET"
+            )
+        except (AttributeError, ValueError):
+            return f"https://storage.cloud.google.com/{self.bucket.name}/{object_name}"
+
+
+class HybridBlobStore:
+    def __init__(self, gcs: GCSBlobStore, local: LocalBlobStore) -> None:
+        self.gcs = gcs
+        self.local = local
+
+    def upload(self, object_name: str, data: bytes, content_type: str) -> str:
+        try:
+            return self.gcs.upload(object_name, data, content_type)
+        except Exception:
+            return self.local.upload(object_name, data, content_type)
+
+    def download(self, uri: str) -> bytes:
+        if uri.startswith("file://"):
+            return self.local.download(uri)
+        if uri.startswith("gs://"):
+            return self.gcs.download(uri)
+        return self.local.download(uri)
+
+    def signed_url(self, uri: str, minutes: int = 10) -> str:
+        if uri.startswith("file://"):
+            return self.local.signed_url(uri, minutes)
+        return self.gcs.signed_url(uri, minutes)

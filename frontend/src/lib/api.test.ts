@@ -83,6 +83,14 @@ describe("authenticated API client", () => {
     expect(result.review_decision).toBe("DECLINE");
     expect(result.draft?.state).toBe("SENT");
   });
+
+  it("translates generic 404 Not Found to backend version mismatch error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "Not Found" }), { status: 404, statusText: "Not Found" })));
+
+    await expect(apiFetch("/api/cases/123/draft/prepare", { method: "POST" })).rejects.toThrow(
+      "Endpoint not found (404). The backend service appears to be running an older build without this route."
+    );
+  });
 });
 
 describe("live view behavior", () => {

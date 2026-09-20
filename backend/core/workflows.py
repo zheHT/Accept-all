@@ -184,7 +184,7 @@ def create_case_draft(
         repository.create_action(
             action_id,
             {
-                "action": "send_draft",
+                "action": "send_draft" if has_live_gmail else "confirm_sent",
                 "case_id": case["case_id"],
                 "chat_id": str(target_chat),
                 "expected_version": updated["version"],
@@ -194,8 +194,12 @@ def create_case_draft(
         )
         keyboard = []
         if draft_url:
-            keyboard.append([{"text": "OPEN IN GMAIL", "url": draft_url}])
-        keyboard.append([{"text": "SEND DRAFT", "callback_data": f"send:{action_id}"}])
+            open_label = "OPEN IN GMAIL" if has_live_gmail else "OPEN GMAIL COMPOSE"
+            keyboard.append([{"text": open_label, "url": draft_url}])
+        if has_live_gmail:
+            keyboard.append([{"text": "SEND DRAFT", "callback_data": f"send:{action_id}"}])
+        else:
+            keyboard.append([{"text": "CONFIRM SENT", "callback_data": f"confirm_sent:{action_id}"}])
         att_text = (
             f"\n\n📎 <b>Attachments:</b> {', '.join(att[0] for att in attachments)}"
             if attachments

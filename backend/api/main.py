@@ -53,6 +53,24 @@ from backend.core.telegram import TELEGRAM_HELP_TEXT, TELEGRAM_WELCOME_TEXT
 from backend.core.workflows import create_case_draft
 from backend.integrations.knowledge import secure_knowledge_publisher
 
+_cache_by_repo: dict[int, tuple[list[dict[str, Any]], float]] = {}
+_cache_ttl: float = 10.0
+
+
+def _get_cached_cases(runtime: Runtime) -> list[dict[str, Any]]:
+    repo_key = id(runtime.repository)
+    now = time.time()
+    cached = _cache_by_repo.get(repo_key)
+    if cached is None or (now - cached[1]) > _cache_ttl:
+        cases = runtime.repository.list_cases(limit=5000)
+        _cache_by_repo[repo_key] = (cases, now)
+        return cases
+    return cached[0]
+
+
+def _invalidate_cached_cases(runtime: Runtime) -> None:
+    _cache_by_repo.pop(id(runtime.repository), None)
+
 
 def create_app(runtime: Runtime | None = None) -> FastAPI:
     settings = runtime.settings if runtime else get_settings()
@@ -174,22 +192,11 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         run["submission"] = run.get("results", {})
         return run
 
-    _cached_cases: list[dict[str, Any]] | None = None
-    _cached_cases_time: float = 0.0
-    _cache_ttl: float = 10.0
-
     def get_cached_cases() -> list[dict[str, Any]]:
-        nonlocal _cached_cases, _cached_cases_time
-        now = time.time()
-        if _cached_cases is None or (now - _cached_cases_time) > _cache_ttl:
-            _cached_cases = runtime.repository.list_cases(limit=5000)
-            _cached_cases_time = now
-        return _cached_cases
+        return _get_cached_cases(runtime)
 
     def invalidate_cached_cases() -> None:
-        nonlocal _cached_cases, _cached_cases_time
-        _cached_cases = None
-        _cached_cases_time = 0.0
+        _invalidate_cached_cases(runtime)
 
     def paged_cases(
         cases: list[dict[str, Any]], limit: int, cursor: str | None
@@ -427,7 +434,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     @app.post("/api/cases/{case_id}/review", dependencies=[Depends(require_user)])
     def review(case_id: str, request: ReviewRequest) -> dict[str, Any]:
         case = get_case_or_404(case_id)
-        if request.decision == ReviewDecision.APPROVE and case.get("field_reviews"):
+        if request.decision == ReviewDecision.APPROVE:
             detail = build_case_detail(case, runtime.repository.list_documents(case_id))
             if detail["unresolved_fields"]:
                 raise HTTPException(409, "resolve all outstanding fields before approving this case")
@@ -447,7 +454,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                     unresolved_fields=detail.get("unresolved_fields"),
                     comparisons=detail.get("comparisons"),
                     field_reviews=case.get("field_reviews"),
-                    set_decline=True,
+                    set_decline=False,
                 )
                 invalidate_cached_cases()
                 return build_case_detail(draft_res, documents)
@@ -1063,8 +1070,18 @@ def _handle_callback(runtime: Runtime, callback: dict[str, Any]) -> None:
     except ValueError:
         runtime.telegram.answer_callback(callback_id, "Invalid action")
         return
+    expected_actions = {
+        "approve": "approve",
+        "decline": "decline",
+        "send": "send_draft",
+        "confirm_sent": "confirm_sent",
+    }
+    expected_action_type = expected_actions.get(action_name)
+    if not expected_action_type:
+        runtime.telegram.answer_callback(callback_id, "Invalid action")
+        return
     action = runtime.repository.consume_action(action_id, chat_id)
-    if not action or action.get("action") != action_name.replace("send", "send_draft"):
+    if not action or action.get("action") != expected_action_type:
         runtime.telegram.answer_callback(callback_id, "Action expired or already used")
         return
     case = runtime.repository.get_case(action["case_id"])
@@ -1073,13 +1090,30 @@ def _handle_callback(runtime: Runtime, callback: dict[str, Any]) -> None:
         return
     try:
         if action_name == "approve":
+            documents = runtime.repository.list_documents(case["case_id"])
+            detail = build_case_detail(case, documents)
+            if detail.get("unresolved_fields"):
+                unresolved_names = ", ".join(detail["unresolved_fields"])
+                runtime.telegram.answer_callback(
+                    callback_id,
+                    f"Cannot approve: resolve fields first ({unresolved_names})",
+                )
+                return
             runtime.repository.update_case(
                 case["case_id"],
                 {"review_decision": "APPROVE"},
                 expected_version=action["expected_version"],
             )
+            runtime.repository.append_event(
+                case["case_id"],
+                "reviewed",
+                {"decision": "APPROVE", "reviewer": f"telegram:{chat_id}"},
+            )
+            _invalidate_cached_cases(runtime)
             runtime.telegram.answer_callback(callback_id, "Case approved")
         elif action_name == "decline":
+            documents = runtime.repository.list_documents(case["case_id"])
+            detail = build_case_detail(case, documents)
             create_case_draft(
                 runtime.repository,
                 runtime.gmail,
@@ -1087,25 +1121,88 @@ def _handle_callback(runtime: Runtime, callback: dict[str, Any]) -> None:
                 case,
                 chat_id,
                 blobs=runtime.blobs,
+                explainer=runtime.explainer,
+                unresolved_fields=detail.get("unresolved_fields"),
+                comparisons=detail.get("comparisons"),
+                field_reviews=case.get("field_reviews"),
+                set_decline=False,
             )
+            _invalidate_cached_cases(runtime)
             runtime.telegram.answer_callback(callback_id, "Draft created")
         elif action_name == "send":
             draft_id = case.get("gmail_draft_id", "")
-            if getattr(runtime.gmail, "is_configured", False) and not draft_id.startswith("draft-"):
-                current = runtime.gmail.get_draft_content(draft_id)
-                if content_hash(current["subject"], current["body"]) != action["expected_content_hash"]:
-                    runtime.telegram.answer_callback(callback_id, "Draft changed; review it again")
-                    return
-                sent = runtime.gmail.send_draft(draft_id)
-                sent_id = sent.get("id")
-            else:
-                sent_id = f"sent-local-{secrets.token_hex(4)}"
+            correction = case.get("correction_draft") or {}
+            delivery_mode = correction.get("delivery_mode") or (
+                "live" if case.get("has_live_gmail") else "compose"
+            )
+            if (
+                delivery_mode != "live"
+                or not getattr(runtime.gmail, "is_configured", False)
+                or not draft_id
+            ):
+                runtime.telegram.answer_callback(
+                    callback_id,
+                    "Live Gmail not configured; use compose window and confirm sent",
+                )
+                return
+            current = runtime.gmail.get_draft_content(draft_id)
+            if content_hash(current["subject"], current["body"]) != action["expected_content_hash"]:
+                runtime.telegram.answer_callback(callback_id, "Draft changed; review it again")
+                return
+            sent = runtime.gmail.send_draft(draft_id)
+            sent_id = sent.get("id")
+            sent_at = utcnow().isoformat()
+            updated_correction = {
+                **(case.get("correction_draft") or {}),
+                "state": "SENT",
+                "sent_at": sent_at,
+                "sent_by": f"telegram:{chat_id}",
+            }
             runtime.repository.update_case(
                 case["case_id"],
-                {"draft_state": "SENT", "gmail_sent_message_id": sent_id},
+                {
+                    "correction_draft": updated_correction,
+                    "draft_state": "SENT",
+                    "gmail_sent_message_id": sent_id,
+                    "review_decision": "DECLINE",
+                },
                 expected_version=action["expected_version"],
             )
+            runtime.repository.append_event(
+                case["case_id"],
+                "gmail_draft_sent",
+                {"message_id": sent_id, "reviewer": f"telegram:{chat_id}"},
+            )
+            _invalidate_cached_cases(runtime)
             runtime.telegram.answer_callback(callback_id, "Draft sent")
+        elif action_name == "confirm_sent":
+            correction = case.get("correction_draft") or {}
+            if not correction and not case.get("draft_subject"):
+                runtime.telegram.answer_callback(callback_id, "No draft to confirm")
+                return
+            sent_at = utcnow().isoformat()
+            updated_correction = {
+                **correction,
+                "state": "SENT",
+                "sent_at": sent_at,
+                "sent_by": f"telegram:{chat_id}",
+            }
+            runtime.repository.update_case(
+                case["case_id"],
+                {
+                    "correction_draft": updated_correction,
+                    "draft_state": "SENT",
+                    "review_decision": "DECLINE",
+                },
+                expected_version=action["expected_version"],
+            )
+            runtime.repository.append_event(
+                case["case_id"],
+                "compose_draft_confirmed_sent",
+                {"reviewer": f"telegram:{chat_id}", "sent_at": sent_at},
+            )
+            _invalidate_cached_cases(runtime)
+            runtime.telegram.answer_callback(callback_id, "Sent confirmed")
     except (Conflict, ValueError, RuntimeError):
         runtime.telegram.answer_callback(callback_id, "Case changed; refresh and try again")
 

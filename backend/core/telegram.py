@@ -231,8 +231,8 @@ class TelegramReviewNotifier:
         keyboard = {
             "inline_keyboard": [
                 [
-                    {"text": "APPROVE", "callback_data": f"approve:{approve_id}"},
-                    {"text": "DECLINE & DRAFT", "callback_data": f"decline:{decline_id}"},
+                    {"text": "APPROVE CASE", "callback_data": f"approve:{approve_id}"},
+                    {"text": "PREPARE DRAFT", "callback_data": f"decline:{decline_id}"},
                 ],
                 [
                     {

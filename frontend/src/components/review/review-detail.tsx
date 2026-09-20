@@ -622,10 +622,10 @@ export function ReviewDetail({
                 active={decisionType === "confirm"}
                 onSelect={() => setDecisionType("confirm")}
                 icon={CheckCircle2}
-                title="Approve / confirm value"
+                title="Confirm extracted value"
                 description={
                   aiValue
-                    ? `The extracted information is correct — record “${aiValue}” as the true value.`
+                    ? `The extracted information is correct — confirm “${aiValue}” as the verified value.`
                     : `Confirm SI value “${siValue ?? "—"}” as the verified value.`
                 }
               />
@@ -884,9 +884,10 @@ export function ReviewDetail({
                     className="btn-primary inline-flex items-center gap-1.5"
                     disabled={caseDetail.draft.state === "SENT"}
                     onClick={onSendDraft}
+                    title="Send live Gmail correction email and complete case as DECLINE"
                   >
                     <Send className="size-4" />
-                    {caseDetail.draft.state === "SENT" ? "Sent" : "Send correction"}
+                    {caseDetail.draft.state === "SENT" ? "Sent" : "Send correction (Decline case)"}
                   </button>
                 ) : (
                   <>
@@ -907,13 +908,14 @@ export function ReviewDetail({
                         className="btn-primary inline-flex items-center gap-1.5"
                         disabled={caseDetail.draft.state === "SENT" || confirmingSent}
                         onClick={onConfirmSentDraft}
+                        title="Confirm email was sent from Gmail compose and complete case as DECLINE"
                       >
                         {confirmingSent ? (
                           <RefreshCw className="size-4 animate-spin" />
                         ) : (
                           <CheckCheck className="size-4" />
                         )}
-                        {caseDetail.draft.state === "SENT" ? "Confirmed sent" : "Confirm sent from Gmail"}
+                        {caseDetail.draft.state === "SENT" ? "Confirmed sent" : "Confirm sent (Decline case)"}
                       </button>
                     )}
                   </>

@@ -188,19 +188,25 @@ export function ReviewView() {
     try {
       const updated = await sendDraft(activeDetail.case_id, activeDetail.version, activeDetail.draft.content_hash);
       setActiveDetail(updated);
-      toast({ title: "Correction email sent", tone: "success" });
+      setCases((current) => current.map((item) => (item.id === activeDetail.case_id ? reviewDetail(updated) : item)));
+      await liveReviews.refresh();
+      toast({
+        title: "Correction email sent",
+        description: "Draft delivered via live Gmail. Case marked as DECLINE with SENT status.",
+        tone: "success",
+      });
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         const refreshed = await getCase(activeDetail.case_id);
         setActiveDetail(refreshed);
       }
       toast({
-        title: error instanceof ApiError && error.status === 409 ? "Draft changed before sending" : "Draft send failed",
-        description: error instanceof ApiError && error.status === 409 ? "The latest draft was loaded. Review it before sending." : error instanceof Error ? error.message : "Please retry.",
+        title: error instanceof ApiError && error.status === 404 ? "Route not found (backend version mismatch)" : error instanceof ApiError && error.status === 409 ? "Draft changed before sending" : "Draft send failed",
+        description: error instanceof Error ? error.message : "Please retry.",
         tone: "warning",
       });
     }
-  }, [activeDetail, toast]);
+  }, [activeDetail, liveReviews, toast]);
 
   const finalizeCase = useCallback(async () => {
     if (!activeDetail || (activeDetail.unresolved_fields?.length ?? 1) > 0) return;
@@ -216,7 +222,11 @@ export function ReviewView() {
         const refreshed = await getCase(activeDetail.case_id);
         setActiveDetail(refreshed);
       }
-      toast({ title: "Case finalization failed", description: error instanceof Error ? error.message : "Resolve every field and retry.", tone: "warning" });
+      toast({
+        title: error instanceof ApiError && error.status === 404 ? "Route not found (backend version mismatch)" : "Case finalization failed",
+        description: error instanceof Error ? error.message : "Resolve every field and retry.",
+        tone: "warning",
+      });
     }
   }, [activeDetail, liveReviews, toast]);
 
@@ -253,7 +263,7 @@ export function ReviewView() {
         setActiveDetail(refreshed);
       }
       toast({
-        title: "Correction draft failed",
+        title: error instanceof ApiError && error.status === 404 ? "Route not found (backend version mismatch)" : "Correction draft failed",
         description: error instanceof Error ? error.message : "Please retry.",
         tone: "warning",
       });

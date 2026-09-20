@@ -42,11 +42,24 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}, retry = 
     } catch {
       // keep statusText fallback
     }
+    if (response.status === 404 && (message === "Not Found" || message === "")) {
+      message = "Endpoint not found (404). The backend service appears to be running an older build without this route.";
+    }
     throw new ApiError(message, response.status);
   }
   if (response.status === 204) return undefined as T;
   const contentType = response.headers.get("content-type") || "";
   return (contentType.includes("application/json") ? await response.json() : await response.text()) as T;
+}
+
+export function formatApiErrorMessage(error: unknown, fallback = "Please retry."): string {
+  if (error instanceof ApiError) {
+    return error.message || fallback;
+  }
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+  return fallback;
 }
 
 export type CaseStatus = "OK" | "MISMATCH" | "NEEDS_REVIEW" | null;
