@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import html
+import logging
 import re
 import secrets
 import time
@@ -10,6 +11,8 @@ from io import BytesIO
 from datetime import date
 from typing import Annotated, Any
 from urllib.parse import quote
+
+logger = logging.getLogger(__name__)
 
 import google.auth.transport.requests
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
@@ -566,6 +569,21 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
 
 def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
+    try:
+        _process_telegram_update(runtime, update)
+    except Exception as exc:
+        logger.exception("Failed to process Telegram update: %s", exc)
+        message = update.get("message") or {}
+        chat_id = message.get("chat", {}).get("id")
+        if chat_id:
+            with suppress(Exception):
+                runtime.telegram.send_message(
+                    str(chat_id),
+                    "⚠️ <i>An error occurred while processing your request. Please try again.</i>",
+                )
+
+
+def _process_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
     callback = update.get("callback_query")
     if callback:
         _handle_callback(runtime, callback)
@@ -688,25 +706,39 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
         runtime.telegram.send_message(chat_id, f"Hourly email limit: <b>{limit}</b>.")
         return
     if command == "/week":
+        progress = runtime.telegram.send_message(chat_id, "⏳ <i>Fetching weekly operations summary...</i>")
         parts = text.split(maxsplit=1)
         week = parts[1].strip() if len(parts) == 2 else ""
-        try:
-            if not re.fullmatch(r"\d{4}-W\d{2}", week):
-                raise ValueError("invalid ISO week")
-            date.fromisocalendar(int(week[:4]), int(week[-2:]), 1)
-        except ValueError:
-            runtime.telegram.send_message(chat_id, "Usage: <code>/week YYYY-W##</code>")
-            return
-        record = runtime.repository.get_knowledge_base_week(week)
-        if not record:
-            runtime.telegram.send_message(
-                chat_id, "Usage: <code>/week YYYY-W##</code> or summary not found."
-            )
-            return
+        if not week:
+            records = runtime.repository.list_knowledge_base_weeks()
+            if not records:
+                runtime.telegram.edit_message_text(
+                    chat_id, progress.get("message_id", 0), "No weekly summaries have been published yet."
+                )
+                return
+            record = records[0]
+            week = str(record.get("week") or "")
+        else:
+            try:
+                if not re.fullmatch(r"\d{4}-W\d{2}", week):
+                    raise ValueError("invalid ISO week")
+                date.fromisocalendar(int(week[:4]), int(week[-2:]), 1)
+            except ValueError:
+                runtime.telegram.edit_message_text(
+                    chat_id, progress.get("message_id", 0), "Usage: <code>/week YYYY-W##</code> (e.g. <code>/week 2026-W38</code>)"
+                )
+                return
+            record = runtime.repository.get_knowledge_base_week(week)
+            if not record:
+                runtime.telegram.edit_message_text(
+                    chat_id, progress.get("message_id", 0), f"Summary for <code>{html.escape(week)}</code> not found."
+                )
+                return
         report_url = runtime.settings.dashboard_base_url.rstrip("/") + "/knowledge-base"
         markup = {"inline_keyboard": [[{"text": "OPEN WEEKLY SUMMARY", "url": report_url}]]}
-        runtime.telegram.send_message(
+        runtime.telegram.edit_message_text(
             chat_id,
+            progress.get("message_id", 0),
             f"<b>Weekly summary {html.escape(week)}</b>\n\n"
             f"{html.escape(record.get('summary_narrative') or 'No narrative is available.')}\n"
             f"Cases analyzed: <b>{record.get('cases_analyzed', 0)}</b>",
@@ -743,11 +775,12 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
         if len(parts) != 2:
             runtime.telegram.send_message(chat_id, "Usage: <code>/submit TOKEN</code>")
             return
+        progress = runtime.telegram.send_message(chat_id, "⏳ <i>Verifying token & queuing AI analysis...</i>")
         source_message_id = f"{chat_id}:{parts[1].strip()}"
         case_id = stable_case_id("telegram", source_message_id)
         case = runtime.repository.get_case(case_id)
         if not case or str(case.get("owner_chat_id")) != chat_id:
-            runtime.telegram.send_message(chat_id, "Case token not found for this chat.")
+            runtime.telegram.edit_message_text(chat_id, progress.get("message_id", 0), "Case token not found for this chat.")
             return
         message_id = runtime.publisher.publish({"case_id": case_id})
         runtime.repository.update_case(
@@ -758,7 +791,7 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
                 "task_message_id": message_id,
             },
         )
-        runtime.telegram.send_message(chat_id, f"Queued case <code>{case_id}</code>.")
+        runtime.telegram.edit_message_text(chat_id, progress.get("message_id", 0), f"Queued case <code>{case_id}</code>.")
         return
     document = message.get("document")
     if document:
@@ -808,7 +841,7 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
             runtime.telegram.send_message(chat_id, answer)
         return
     if text:
-        progress = runtime.telegram.send_message(chat_id, "💭 <i>Thinking...</i>")
+        progress = runtime.telegram.send_message(chat_id, "💭 <i>Thinking... Fetching answer...</i>")
         try:
             answer = runtime.explainer.assist(text)
         except Exception:

@@ -208,3 +208,26 @@ def test_telegram_plain_text_notification_control(runtime):
     )
     assert runtime.repository.get_platform_settings()["mismatch_alerts_enabled"] is True
     assert "Notifications:</b> on" in runtime.telegram.messages[-1][1]
+
+
+def test_telegram_week_and_submit_progress(runtime) -> None:
+    runtime.settings.telegram_admin_chat_id = "42"
+    runtime.repository.save_knowledge_base_week(
+        {
+            "week": "2026-W38",
+            "summary_narrative": "Weekly report narrative details.",
+            "cases_analyzed": 14,
+        }
+    )
+    client = TestClient(create_app(runtime))
+    headers = {"x-telegram-bot-api-secret-token": runtime.settings.telegram_webhook_secret}
+
+    # Admin runs /week without specifying week: auto-fetches latest and uses progress
+    client.post(
+        "/api/telegram-webhook",
+        json={"message": {"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": "/week"}},
+        headers=headers,
+    )
+    # Check that the edited message contains the summary
+    assert any("Weekly summary 2026-W38" in m[1] for m in runtime.telegram.messages)
+
