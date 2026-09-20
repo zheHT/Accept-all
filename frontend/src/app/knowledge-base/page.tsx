@@ -1,17 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  BookOpen,
   CalendarDays,
   Clock3,
   Database,
-  ExternalLink,
   FileText,
   RefreshCw,
   Search,
   ShieldCheck,
-  X,
 } from "lucide-react";
 import { PageHeading } from "@/components/app-shell/page-heading";
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
@@ -19,7 +16,6 @@ import { useToast } from "@/components/ui/toast";
 import {
   fetchAssumptionRegistry,
   fetchKnowledgeBaseWeeks,
-  fetchKnowledgePreview,
   publishWeeklySnapshot,
   type AssumptionRecord,
   type KnowledgeBaseWeek,
@@ -41,8 +37,6 @@ export default function KnowledgeBasePage() {
   const weeks = useLiveQuery((signal) => fetchKnowledgeBaseWeeks(signal), []);
   const registry = useLiveQuery((signal) => fetchAssumptionRegistry(signal), []);
   const [publishing, setPublishing] = useState(false);
-  const [preview, setPreview] = useState<{ title: string; html: string } | null>(null);
-  const [previewLoading, setPreviewLoading] = useState<string | null>(null);
   const [registryFilter, setRegistryFilter] = useState<RegistryFilter>("all");
   const [registryQuery, setRegistryQuery] = useState("");
 
@@ -82,22 +76,6 @@ export default function KnowledgeBasePage() {
       });
     } finally {
       setPublishing(false);
-    }
-  };
-
-  const openPreview = async (week: KnowledgeBaseWeek) => {
-    setPreviewLoading(week.week);
-    try {
-      const html = await fetchKnowledgePreview(`ClassAll_Assumptions_${week.week}`);
-      setPreview({ title: `ClassAll weekly knowledge, ${formatWeek(week.week)}`, html });
-    } catch (error) {
-      toast({
-        title: "Preview could not be opened",
-        description: error instanceof Error ? error.message : "Please retry.",
-        tone: "warning",
-      });
-    } finally {
-      setPreviewLoading(null);
     }
   };
 
@@ -176,8 +154,6 @@ export default function KnowledgeBasePage() {
                   key={week.week}
                   week={week}
                   latest={index === 0}
-                  loading={previewLoading === week.week}
-                  onPreview={() => void openPreview(week)}
                 />
               ))}
             </ol>
@@ -249,8 +225,6 @@ export default function KnowledgeBasePage() {
           </div>
         </article>
       </section>
-
-      <KnowledgePreview preview={preview} onClose={() => setPreview(null)} />
     </div>
   );
 }
@@ -306,13 +280,9 @@ function KnowledgeSummary({
 function WeeklyBriefing({
   week,
   latest,
-  loading,
-  onPreview,
 }: {
   week: KnowledgeBaseWeek;
   latest: boolean;
-  loading: boolean;
-  onPreview: () => void;
 }) {
   const outcomes = [
     { label: "Matched", value: week.status_counts.OK || 0, tone: "bg-matched-500" },
@@ -323,11 +293,6 @@ function WeeklyBriefing({
   const categories = Object.entries(week.category_counts)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 3);
-  const isRealDriveUrl =
-    Boolean(week.drive_url?.startsWith("https://")) &&
-    !week.drive_url?.includes("ClassAll_");
-  const externalDriveUrl = isRealDriveUrl ? week.drive_url : null;
-
   return (
     <li className="px-5 py-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -393,30 +358,6 @@ function WeeklyBriefing({
             </div>
           )}
         </div>
-
-        <div className="flex shrink-0 items-center gap-2">
-          {externalDriveUrl ? (
-            <a href={externalDriveUrl} target="_blank" rel="noreferrer" className="btn-glass active:scale-95">
-              <ExternalLink className="size-4" />
-              Google Doc
-            </a>
-          ) : (
-            <button
-              type="button"
-              className="btn-glass active:scale-95"
-              disabled={loading}
-              onClick={onPreview}
-              title="Open document briefing"
-            >
-              <FileText className="size-4" />
-              Doc
-            </button>
-          )}
-          <button type="button" className="btn-primary active:scale-95" disabled={loading} onClick={onPreview}>
-            {loading ? <RefreshCw className="size-4 animate-spin" /> : <BookOpen className="size-4" />}
-            {loading ? "Opening…" : "Read briefing"}
-          </button>
-        </div>
       </div>
     </li>
   );
@@ -448,78 +389,6 @@ function AssumptionItem({ item }: { item: AssumptionRecord }) {
     </li>
   );
 }
-
-
-function KnowledgePreview({
-  preview,
-  onClose,
-}: {
-  preview: { title: string; html: string } | null;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    if (!preview) return;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.body.style.overflow = previous;
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [onClose, preview]);
-
-  if (!preview) return null;
-
-  return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-0 sm:p-5">
-      <button type="button" aria-label="Close knowledge preview" onClick={onClose} className="absolute inset-0 bg-overlay backdrop-blur-sm" />
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-label={preview.title}
-        className="glass-solid relative flex h-full w-full flex-col overflow-hidden rounded-none sm:h-[90vh] sm:max-w-6xl sm:rounded-2xl"
-      >
-        <header className="flex min-h-16 items-center gap-3 border-b border-line px-4 py-3 sm:px-5">
-          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200">
-            <BookOpen className="size-[17px]" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[13.5px] font-semibold text-ink-900">{preview.title}</p>
-            <p className="mt-0.5 text-[11px] text-ink-400">Rendered Markdown · authenticated preview</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              title="Open document in new browser tab"
-              onClick={() => {
-                const blob = new Blob([preview.html], { type: "text/html" });
-                const url = URL.createObjectURL(blob);
-                window.open(url, "_blank");
-              }}
-              className="flex items-center gap-1.5 rounded-lg border border-line bg-surface/80 px-2.5 py-1.5 text-[12px] font-medium text-ink-600 transition-colors hover:bg-surface hover:text-ink-900 active:scale-95"
-            >
-              <ExternalLink className="size-3.5" />
-              <span className="hidden sm:inline">New tab</span>
-            </button>
-            <button type="button" aria-label="Close preview" onClick={onClose} className="grid size-9 place-items-center rounded-xl text-ink-400 transition-colors hover:bg-surface hover:text-ink-900 active:scale-95">
-              <X className="size-5" />
-            </button>
-          </div>
-        </header>
-        <iframe
-          title={preview.title}
-          sandbox=""
-          srcDoc={preview.html}
-          className="min-h-0 flex-1 bg-white"
-        />
-      </section>
-    </div>
-  );
-}
-
 function humanize(value: string) {
   return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

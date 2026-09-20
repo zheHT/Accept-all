@@ -227,9 +227,6 @@ class AssumptionRecord(BaseModel):
 
 class KnowledgeBaseWeekRecord(BaseModel):
     week: str  # e.g. 2026-W38
-    drive_file_id: str | None = None
-    drive_url: str | None = None
-    preview_uri: str | None = None
     content_hash: str
     source_watermark: str = ""
     published_at: str

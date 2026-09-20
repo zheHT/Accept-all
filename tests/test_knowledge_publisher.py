@@ -1,39 +1,11 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 from fastapi.testclient import TestClient
 
 from backend.api.main import create_app as create_api_app
-from backend.api.markdown_preview import render_preview_document
 from backend.core.runtime import Runtime
 from backend.core.schemas import ResultStatus
 from backend.worker.main import create_app as create_worker_app
-
-
-def test_google_docs_public_link_is_readable(runtime: Runtime) -> None:
-    runtime.settings.app_env = "production"
-    docs_service = MagicMock()
-    docs_service.documents.return_value.create.return_value.execute.return_value = {
-        "documentId": "doc-123"
-    }
-    drive_service = MagicMock()
-
-    with patch("google.auth.default", return_value=(object(), "test-project")), patch(
-        "googleapiclient.discovery.build", side_effect=[docs_service, drive_service]
-    ):
-        doc_id, drive_url, _ = runtime.knowledge_publisher.publish_to_drive_or_local(
-            "Weekly Knowledge Base", "# Summary", "ClassAll_Assumptions_2026-W38"
-        )
-
-    assert doc_id == "doc-123"
-    assert drive_url == "https://docs.google.com/document/d/doc-123/edit"
-    drive_service.permissions.return_value.create.assert_called_once_with(
-        fileId="doc-123",
-        body={"type": "anyone", "role": "reader"},
-        sendNotificationEmail=False,
-        fields="id",
-    )
 
 
 def test_knowledge_publisher_aggregates_and_publishes(runtime: Runtime) -> None:
@@ -87,8 +59,8 @@ def test_knowledge_publisher_aggregates_and_publishes(runtime: Runtime) -> None:
     assert published["status_counts"]["NEEDS_REVIEW"] == 1
     assert published["assumptions_count"] == 2
     assert published["content_hash"]
-    drive_url = published["drive_url"]
-    assert "2026-W38" in drive_url or "ClassAll_Assumptions_2026-W38" in drive_url
+    assert "drive_url" not in published
+    assert "preview_uri" not in published
 
     # Verify repository storage
     stored_week = runtime.repository.get_knowledge_base_week("2026-W38")
@@ -133,25 +105,9 @@ def test_api_knowledge_base_routes(runtime: Runtime) -> None:
     assert registry_resp.status_code == 200
     assert isinstance(registry_resp.json(), list)
 
-    # Preview route
+    # The removed document preview route must not be available.
     preview_resp = api.get("/api/knowledge-base/preview/ClassAll_Assumptions_2026-W39")
-    assert preview_resp.status_code == 200
-    assert "<h1>ClassAll" in preview_resp.text
-    assert "<table>" in preview_resp.text
-    assert "<pre>" not in preview_resp.text
-
-
-def test_markdown_preview_renders_document_and_escapes_stored_html() -> None:
-    preview = render_preview_document(
-        "# Weekly Summary\n\n## Outcomes\n| Status | Count |\n| --- | --- |\n"
-        "| OK | 7 |\n\n<script>alert('xss')</script>"
-    )
-
-    assert "<h1>Weekly Summary</h1>" in preview
-    assert "<th scope='col'>Status</th>" in preview
-    assert "<td>7</td>" in preview
-    assert "<script>" not in preview
-    assert "&lt;script&gt;" in preview
+    assert preview_resp.status_code == 404
 
 
 def test_worker_weekly_summary_cron_publishes(runtime: Runtime) -> None:
@@ -163,7 +119,7 @@ def test_worker_weekly_summary_cron_publishes(runtime: Runtime) -> None:
     data = resp.json()
     assert data["already_sent"] is False
     assert "week" in data
-    assert "drive_url" in data
+    assert "drive_url" not in data
     assert data["status"] == "published"
 
     # Subsequent run in same week is already claimed

@@ -232,8 +232,6 @@ export interface PlatformSettings {
 }
 export interface KnowledgeBaseWeek {
   week: string;
-  drive_file_id?: string | null;
-  drive_url?: string | null;
   content_hash: string;
   published_at: string;
   status: string;
@@ -344,7 +342,6 @@ export const startGmailOAuth = () => apiFetch<{ authorization_url: string }>("/a
 export const fetchKnowledgeBaseWeeks = (signal?: AbortSignal) => apiFetch<KnowledgeBaseWeek[]>("/api/knowledge-base/weeks", { signal });
 export const fetchAssumptionRegistry = (signal?: AbortSignal) => apiFetch<AssumptionRecord[]>("/api/knowledge-base/registry", { signal });
 export const publishWeeklySnapshot = (week?: string) => apiFetch<KnowledgeBaseWeek>(`/api/knowledge-base/publish${week ? `?week=${encodeURIComponent(week)}` : ""}`, { method: "POST" });
-export const fetchKnowledgePreview = (filename: string) => apiFetch<string>(`/api/knowledge-base/preview/${encodeURIComponent(filename)}`);
 
 export const generateSI = (caseId: string, expectedVersion?: number, fields?: Record<string, unknown>) =>
   apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/actions/generate-si`, {

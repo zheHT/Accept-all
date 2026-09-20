@@ -24,6 +24,7 @@ from pydantic import ValidationError
 
 from backend.evaluation_adapter.attachment_sniffer import MAX_CHARS, inspect_attachment
 from backend.evaluation_adapter.classifier_flow import (
+    _check_missing_attachments,
     classify_email,
 )
 from backend.evaluation_adapter.main import app

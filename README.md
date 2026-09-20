@@ -99,10 +99,9 @@ Stored in Firestore at `platform_settings/current`:
   - `missing_value_requires_review`: Fixed `true` — any missing required contract field triggers human verification.
   - `unreadable_requires_review`: Fixed `true` — corrupted, password-protected, or unparseable attachments automatically route to review.
 
-### Hardened Knowledge Base & Previews
+### Knowledge Base
 - Weekly knowledge bases aggregate operational exceptions and patterns by ISO week (e.g., `2026-W38`).
-- Generated Markdown documents are stored securely in Google Cloud Storage blobs.
-- Previews are rendered on-demand through an authenticated endpoint (`/api/knowledge-base/preview/{filename}`) with HTML escaping (`html.escape()`) and a strict Content Security Policy (`default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none';`).
+- Weekly summaries and governed assumptions are stored in the application knowledge base and surfaced in the authenticated dashboard.
 
 ### Document Comparison & Field Review
 
