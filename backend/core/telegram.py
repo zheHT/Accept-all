@@ -29,6 +29,8 @@ TELEGRAM_WELCOME_TEXT = (
     "container count, and gross weight).\n"
     "• <b>Correspondence Classification:</b> Automatically triage incoming customer messages "
     "(BL comparison, new SI requests, invoices, and operational queries).\n"
+    "• <b>Incoming Gmail Detection:</b> Gmail push events are processed immediately, with an "
+    "hourly reconciliation safety net and a configurable email limit.\n"
     "• <b>Interactive Reviews & Drafts:</b> Review flagged discrepancies and generate safe correction "
     "drafts for Gmail with one tap.\n\n"
     "<b>How to get started:</b>\n"
@@ -60,7 +62,13 @@ TELEGRAM_HELP_TEXT = (
     "• <b>MANUAL CHECK:</b> Direct link to the live web dashboard\n\n"
     "<b>Ask the AI:</b>\n"
     "Mention any <code>case-&lt;id&gt;</code> (e.g. <code>case-18e47... why was this declined?</code>) "
-    "to query the stored evidence using Gemini!"
+    "to query the stored evidence using Gemini.\n\n"
+    "<b>Operations:</b>\n"
+    "• <code>/notifications</code> — Show alert and hourly email settings\n"
+    "• <code>/notifications on|off</code> — Enable or mute mismatch alerts (admin)\n"
+    "• <code>/email-limit N</code> — Set the hourly reconciliation cap (admin)\n"
+    "• <code>/week YYYY-W##</code> — Read a published weekly summary\n"
+    "• <code>/ask CASE_ID question</code> — Ask for more detail about a case"
 )
 
 
@@ -86,19 +94,66 @@ class TelegramClient:
         text: str,
         *,
         reply_markup: dict[str, Any] | None = None,
+        parse_mode: str | None = "HTML",
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         if reply_markup:
             payload["reply_markup"] = reply_markup
-        return self._call("sendMessage", payload)
+        try:
+            return self._call("sendMessage", payload)
+        except Exception:
+            if parse_mode:
+                payload.pop("parse_mode", None)
+                return self._call("sendMessage", payload)
+            raise
 
     def answer_callback(self, callback_query_id: str, text: str) -> None:
         self._call("answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
+
+    def send_chat_action(self, chat_id: str | int, action: str = "typing") -> dict[str, Any]:
+        try:
+            return self._call("sendChatAction", {"chat_id": chat_id, "action": action})
+        except Exception:
+            return {}
+
+    def edit_message_text(
+        self,
+        chat_id: str | int,
+        message_id: int | str,
+        text: str,
+        *,
+        reply_markup: dict[str, Any] | None = None,
+        parse_mode: str | None = "HTML",
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": int(message_id),
+            "text": text,
+            "disable_web_page_preview": True,
+        }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        try:
+            return self._call("editMessageText", payload)
+        except Exception:
+            if parse_mode:
+                payload.pop("parse_mode", None)
+                return self._call("editMessageText", payload)
+            raise
+
+    def delete_message(self, chat_id: str | int, message_id: int | str) -> bool:
+        try:
+            return bool(self._call("deleteMessage", {"chat_id": chat_id, "message_id": int(message_id)}))
+        except Exception:
+            return False
 
     def get_file(self, file_id: str) -> tuple[bytes, str]:
         result = self._call("getFile", {"file_id": file_id})
@@ -115,6 +170,10 @@ class TelegramClient:
             {"command": "newcase", "description": "Create a new document triage case"},
             {"command": "submit", "description": "Submit case token for discrepancy verification"},
             {"command": "help", "description": "Show commands & 7-field verification guide"},
+            {"command": "notifications", "description": "Show or change notification settings"},
+            {"command": "email_limit", "description": "Set hourly Gmail reconciliation limit"},
+            {"command": "week", "description": "Read a weekly knowledge summary"},
+            {"command": "ask", "description": "Ask about a case"},
         ]
         return self._call("setMyCommands", {"commands": cmds})
 
@@ -172,8 +231,8 @@ class TelegramReviewNotifier:
         keyboard = {
             "inline_keyboard": [
                 [
-                    {"text": "APPROVE", "callback_data": f"approve:{approve_id}"},
-                    {"text": "DECLINE & DRAFT", "callback_data": f"decline:{decline_id}"},
+                    {"text": "APPROVE CASE", "callback_data": f"approve:{approve_id}"},
+                    {"text": "PREPARE DRAFT", "callback_data": f"decline:{decline_id}"},
                 ],
                 [
                     {

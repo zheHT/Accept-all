@@ -112,15 +112,29 @@ export default function KnowledgeBasePage() {
         title="Knowledge Base"
         subtitle="Weekly operational briefings, verified patterns, and the assumptions reviewers have governed over time."
         actions={
-          <button
-            type="button"
-            className="btn-primary active:scale-95"
-            disabled={publishing}
-            onClick={() => void publish()}
-          >
-            <RefreshCw className={cn("size-4", publishing && "animate-spin")} />
-            {publishing ? "Publishing…" : "Publish current week"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="btn-glass active:scale-95"
+              disabled={weeks.loading || registry.loading}
+              onClick={() => {
+                void Promise.all([weeks.refresh(), registry.refresh()]);
+                toast({ title: "Knowledge base refreshed", tone: "info" });
+              }}
+            >
+              <RefreshCw className={cn("size-3.5", (weeks.loading || registry.loading) && "animate-spin")} />
+              Refresh
+            </button>
+            <button
+              type="button"
+              className="btn-primary active:scale-95"
+              disabled={publishing}
+              onClick={() => void publish()}
+            >
+              <RefreshCw className={cn("size-4", publishing && "animate-spin")} />
+              {publishing ? "Publishing…" : "Publish current week"}
+            </button>
+          </div>
         }
       />
 
@@ -154,7 +168,7 @@ export default function KnowledgeBasePage() {
               detail="Publish the current week after reviewed operational cases are available."
             />
           ) : (
-            <ol className="divide-y divide-line">
+            <ol className="max-h-[760px] divide-y divide-line overflow-y-auto overscroll-contain">
               {publications.map((week, index) => (
                 <WeeklyBriefing
                   key={week.week}
@@ -301,7 +315,10 @@ function WeeklyBriefing({
   const categories = Object.entries(week.category_counts)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 3);
-  const externalDriveUrl = week.drive_url?.startsWith("https://") ? week.drive_url : null;
+  const isRealDriveUrl =
+    Boolean(week.drive_url?.startsWith("https://")) &&
+    !week.drive_url?.includes("ClassAll_");
+  const externalDriveUrl = isRealDriveUrl ? week.drive_url : null;
 
   return (
     <li className="px-5 py-5">
@@ -370,11 +387,22 @@ function WeeklyBriefing({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          {externalDriveUrl && (
+          {externalDriveUrl ? (
             <a href={externalDriveUrl} target="_blank" rel="noreferrer" className="btn-glass active:scale-95">
               <ExternalLink className="size-4" />
               Google Doc
             </a>
+          ) : (
+            <button
+              type="button"
+              className="btn-glass active:scale-95"
+              disabled={loading}
+              onClick={onPreview}
+              title="Open document briefing"
+            >
+              <FileText className="size-4" />
+              Doc
+            </button>
           )}
           <button type="button" className="btn-primary active:scale-95" disabled={loading} onClick={onPreview}>
             {loading ? <RefreshCw className="size-4 animate-spin" /> : <BookOpen className="size-4" />}
@@ -478,9 +506,24 @@ function KnowledgePreview({
             <p className="truncate text-[13.5px] font-semibold text-ink-900">{preview.title}</p>
             <p className="mt-0.5 text-[11px] text-ink-400">Rendered Markdown · authenticated preview</p>
           </div>
-          <button type="button" aria-label="Close preview" onClick={onClose} className="grid size-10 place-items-center rounded-xl text-ink-400 transition-colors hover:bg-surface hover:text-ink-900 active:scale-95">
-            <X className="size-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              title="Open document in new browser tab"
+              onClick={() => {
+                const blob = new Blob([preview.html], { type: "text/html" });
+                const url = URL.createObjectURL(blob);
+                window.open(url, "_blank");
+              }}
+              className="flex items-center gap-1.5 rounded-lg border border-line bg-surface/80 px-2.5 py-1.5 text-[12px] font-medium text-ink-600 transition-colors hover:bg-surface hover:text-ink-900 active:scale-95"
+            >
+              <ExternalLink className="size-3.5" />
+              <span className="hidden sm:inline">New tab</span>
+            </button>
+            <button type="button" aria-label="Close preview" onClick={onClose} className="grid size-9 place-items-center rounded-xl text-ink-400 transition-colors hover:bg-surface hover:text-ink-900 active:scale-95">
+              <X className="size-5" />
+            </button>
+          </div>
         </header>
         <iframe
           title={preview.title}

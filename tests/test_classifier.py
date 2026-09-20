@@ -2,7 +2,7 @@
 
 Uses pytest, unittest.mock, and httpx / TestClient.
 All external LLM calls are mocked to ensure deterministic, network-free execution
-while strictly validating production model configuration ('gemini-2.5-flash').
+while strictly validating production model configuration.
 """
 import io
 import json
@@ -127,8 +127,9 @@ def test_schema_attribute_defaults():
 # --------------------------------------------------------------------------
 # Area 2: Model Configuration Verification
 # --------------------------------------------------------------------------
-def test_agent_model_target_is_gemini_2_5_flash(mock_gemini_client):
-    """4. Explicitly assert that the classifier agent targets 'gemini-2.5-flash' with temperature=0.0."""
+def test_agent_uses_configured_gemini_model(mock_gemini_client, monkeypatch):
+    """The classifier passes the shared model setting to the SDK."""
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-test-flash")
     # Execute classification call
     classify_email(
         email_id="model_cfg_test",
@@ -142,12 +143,9 @@ def test_agent_model_target_is_gemini_2_5_flash(mock_gemini_client):
     assert mock_gemini_client.models.generate_content.called
     call_args, call_kwargs = mock_gemini_client.models.generate_content.call_args
 
-    # Assert model parameter is specifically 'gemini-2.5-flash'
+    # Assert model parameter comes from the shared environment setting.
     model_passed = call_kwargs.get("model")
-    assert model_passed == "gemini-2.5-flash", (
-        f"Expected model to be 'gemini-2.5-flash', but got '{model_passed}'! "
-        "Deprecated models like 'gemini-1.5-flash' must not be used."
-    )
+    assert model_passed == "gemini-test-flash"
 
     # Assert deterministic configuration (temperature=0.0, response_schema=EmailClassification)
     config = call_kwargs.get("config")
@@ -155,6 +153,56 @@ def test_agent_model_target_is_gemini_2_5_flash(mock_gemini_client):
     assert config.temperature == 0.0
     assert config.response_mime_type == "application/json"
     assert config.response_schema == EmailClassification
+    assert mock_gemini_client.close.called
+
+
+def test_classifier_closes_client_after_sdk_failure(mock_gemini_client):
+    """A failed live classification still releases its per-call SDK client."""
+    mock_gemini_client.models.generate_content.side_effect = RuntimeError("sdk failed")
+
+    with pytest.raises(RuntimeError, match="sdk failed"):
+        classify_email(
+            email_id="client_cleanup_failure",
+            subject="Draft BL check",
+            sender="ops@example.com",
+            body="Please compare the draft BL and SI.",
+            attachment_previews={},
+        )
+
+    assert mock_gemini_client.close.called
+
+
+def test_classifier_preserves_request_error_when_client_close_fails(mock_gemini_client):
+    """A cleanup failure cannot replace the Gemini request failure."""
+    mock_gemini_client.models.generate_content.side_effect = RuntimeError("request failed")
+    mock_gemini_client.close.side_effect = RuntimeError("close failed")
+
+    with pytest.raises(RuntimeError, match="request failed"):
+        classify_email(
+            email_id="client_cleanup_request_failure",
+            subject="Draft BL check",
+            sender="ops@example.com",
+            body="Please compare the draft BL and SI.",
+            attachment_previews={},
+        )
+
+
+def test_classifier_returns_result_when_client_close_fails(mock_gemini_client):
+    """A cleanup failure after a valid response does not discard classification."""
+    mock_gemini_client.close.side_effect = RuntimeError("close failed")
+
+    result = classify_email(
+        email_id="client_cleanup_success",
+        subject="Draft BL check",
+        sender="ops@example.com",
+        body="Please compare the draft BL and SI.",
+        attachment_previews={
+            "si.pdf": "[PDF document: original bytes retained]",
+            "bl.pdf": "[PDF document: original bytes retained]",
+        },
+    )
+
+    assert result.category == EmailCategory.DOCUMENT_COMPARISON
 
 
 # --------------------------------------------------------------------------
@@ -269,6 +317,52 @@ def test_guardrail_document_comparison_with_valid_attachments(mock_gemini_client
     assert result.is_comparison_candidate is True
     assert result.missing_attachments_flag is False
     assert len(result.detected_attachments) == 2
+
+
+def test_guardrail_clears_llm_missing_flag_for_two_pdf_markers(mock_gemini_client):
+    """Two previews override an incorrect LLM missing-attachment flag."""
+    mock_response = MagicMock()
+    mock_response.text = json.dumps({
+        "category": "DOCUMENT_COMPARISON",
+        "confidence": 0.97,
+        "reasoning": "Both documents were supplied for downstream review.",
+        "is_comparison_candidate": True,
+        "missing_attachments_flag": True,
+        "detected_attachments": ["si.pdf", "bl.pdf"],
+    })
+    mock_gemini_client.models.generate_content.return_value = mock_response
+
+    result = classify_email(
+        email_id="two_pdf_markers",
+        subject="Review draft BL",
+        sender="ops@example.com",
+        body="Please compare the draft BL with our SI.",
+        attachment_previews={
+            "si.pdf": "[PDF document: original bytes retained]",
+            "bl.pdf": "[PDF document: original bytes retained]",
+        },
+    )
+
+    assert result.missing_attachments_flag is False
+
+
+def test_scanned_pdf_markers_are_not_missing_attachments():
+    """Two supplied document previews count even when their PDFs need review."""
+    assert _check_missing_attachments(
+        EmailCategory.DOCUMENT_COMPARISON,
+        {
+            "si.pdf": "[PDF document: original bytes retained]",
+            "bl.pdf": "[PDF document: original bytes retained]",
+        },
+    ) is False
+
+
+def test_one_expected_attachment_is_missing():
+    """A comparison has a missing attachment when fewer than two previews arrive."""
+    assert _check_missing_attachments(
+        EmailCategory.DOCUMENT_COMPARISON,
+        {"si.txt": "SHIPPING INSTRUCTION"},
+    ) is True
 
 
 def test_deceptive_subject_line_resolution(mock_gemini_client):

@@ -104,6 +104,17 @@ Stored in Firestore at `platform_settings/current`:
 - Generated Markdown documents are stored securely in Google Cloud Storage blobs.
 - Previews are rendered on-demand through an authenticated endpoint (`/api/knowledge-base/preview/{filename}`) with HTML escaping (`html.escape()`) and a strict Content Security Policy (`default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none';`).
 
+### Document Comparison & Field Review
+
+- Review, Inbox, and Verification Cases share a document comparison workspace. Each pane can show the original PDF or extracted text independently.
+- `GET /api/cases/{case_id}/documents/{document_id}/content` serves original bytes behind reviewer authentication. PDF responses include an actual `X-Document-Page-Count` when readable; other file types are served as downloads. Responses are private and uncached.
+- `PUT /api/cases/{case_id}/fields/{field}/review` accepts `decision` (`confirm`, `correct`, or `unreadable`), `expected_version`, `document_role` (`SI` or `BL`), optional correction `value`, and `note`. Use public field names, including `gross_weight`.
+- Decisions retain the original machine values, reviewer identity, UTC timestamp, effective human values, and append-only review history. Saving a field does not approve or decline the case, create a Gmail draft, or send a reply.
+- Missing or unreadable fields remain unresolved. Final approval of a case with structured decisions is blocked while required fields remain unresolved. Retrying extraction clears current decisions while retaining their history.
+- Run the focused server checks with `uv run pytest tests/test_field_review.py tests/test_platform_api.py tests/test_draft_workflow.py -q`, and the frontend checks with `npm test --prefix frontend`, `npm run typecheck --prefix frontend`, and `npm run lint --prefix frontend`.
+
+For acceptance testing, compare two multi-page PDFs, switch only one pane to text, verify page and zoom retention, review multiple flagged fields, reload a saved correction, and test a stale decision from a second reviewer. Check the same workflow at narrow widths and with keyboard navigation. Operational review-time savings and missed-discrepancy rates need a measured reviewer trial; automated checks do not establish those outcomes.
+
 ---
 
 ## Environment Setup & Configuration

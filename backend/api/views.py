@@ -102,7 +102,9 @@ def build_comparisons(documents: list[dict[str, Any]], case: dict[str, Any]) -> 
             "matches": field not in defects and (
                 "gross_weight_kg" not in defects or field != "gross_weight"
             ),
-            "low_confidence": field in low_confidence,
+            "low_confidence": field in low_confidence or (
+                field == "gross_weight" and "gross_weight_kg" in low_confidence
+            ),
         }
         for field, label in VERIFIED_FIELDS
     ]
@@ -110,6 +112,34 @@ def build_comparisons(documents: list[dict[str, Any]], case: dict[str, Any]) -> 
 
 def build_case_summary(case: dict[str, Any]) -> dict[str, Any]:
     result = case.get("result") or {}
+    required = case.get("required_review_fields")
+    if required is None:
+        flagged = set(result.get("defect_fields") or []) | set(case.get("low_confidence_fields") or [])
+        if "gross_weight_kg" in flagged:
+            flagged.add("gross_weight")
+        required = [field for field, _ in VERIFIED_FIELDS if field in flagged]
+    field_reviews = case.get("field_reviews") or {}
+    unresolved = [field for field in required if not field_reviews.get(field, {}).get("resolved")]
+    confidence_val = (
+        case.get("confidence")
+        or case.get("confidence_score")
+        or (case.get("result") or {}).get("confidence")
+        or (case.get("result") or {}).get("confidence_score")
+    )
+    if confidence_val is None:
+        if case.get("low_confidence"):
+            flagged_count = len(case.get("low_confidence_fields") or []) or 1
+            confidence_val = max(0.55, 0.74 - (flagged_count - 1) * 0.05)
+        elif result.get("status") == "MISMATCH":
+            defects_count = len(result.get("defect_fields") or []) or 1
+            confidence_val = max(0.72, 0.88 - (defects_count - 1) * 0.04)
+        elif result.get("status") == "NEEDS_REVIEW":
+            reason = str(result.get("review_reason") or "").lower()
+            confidence_val = 0.52 if "unreadable" in reason else (0.74 if "missing" in reason else 0.68)
+        elif result.get("status") == "OK":
+            confidence_val = 0.96
+        else:
+            confidence_val = 0.85
     return {
         "case_id": case.get("case_id"),
         "source_type": case.get("source_type"),
@@ -127,32 +157,76 @@ def build_case_summary(case: dict[str, Any]) -> dict[str, Any]:
         "review_decision": case.get("review_decision"),
         "low_confidence": bool(case.get("low_confidence")),
         "low_confidence_fields": case.get("low_confidence_fields", []),
+        "confidence": round(float(confidence_val), 2),
         "version": case.get("version", 0),
         "draft_state": case.get("draft_state"),
+        "unresolved_fields": unresolved,
+        "review_progress": {"total": len(required), "completed": len(required) - len(unresolved)},
     }
 
 
 def build_case_detail(case: dict[str, Any], documents: list[dict[str, Any]]) -> dict[str, Any]:
+    comparisons = build_comparisons(documents, case)
+    required = required_review_fields(case, comparisons)
+    summary = build_case_summary({**case, "required_review_fields": required})
+    valid_confidences = [
+        val["confidence"]
+        for comp in comparisons
+        for val in (comp.get("si", {}), comp.get("bl", {}))
+        if isinstance(val.get("confidence"), (int, float)) and val["confidence"] > 0
+    ]
+    if valid_confidences:
+        summary["confidence"] = round(sum(valid_confidences) / len(valid_confidences), 2)
     return {
-        **build_case_summary(case),
+        **summary,
         "body": case.get("body", ""),
         "recipients": case.get("recipients", []),
         "rationale": case.get("rationale", ""),
         "assumptions": case.get("assumptions", []),
         "result": case.get("result"),
         "documents": [_public_document(document) for document in documents],
-        "comparisons": build_comparisons(documents, case),
+        "comparisons": comparisons,
+        "field_reviews": case.get("field_reviews") or {},
+        "review_history": case.get("review_history") or [],
         "draft": (
             {
-                "state": case.get("draft_state"),
-                "subject": case.get("draft_subject"),
-                "body": case.get("draft_body"),
-                "content_hash": case.get("draft_content_hash"),
+                "state": (case.get("correction_draft") or {}).get("state") or case.get("draft_state", "READY"),
+                "subject": (case.get("correction_draft") or {}).get("subject") or case.get("draft_subject", ""),
+                "body": (case.get("correction_draft") or {}).get("body") or case.get("draft_body", ""),
+                "content_hash": (case.get("correction_draft") or {}).get("content_hash") or case.get("draft_content_hash", ""),
+                "delivery_mode": (case.get("correction_draft") or {}).get("delivery_mode") or ("live" if case.get("has_live_gmail") else "compose"),
+                "origin": (case.get("correction_draft") or {}).get("origin", "template"),
+                "gmail_url": (case.get("correction_draft") or {}).get("gmail_url") or case.get("gmail_draft_url"),
+                "has_live_gmail": (case.get("correction_draft") or {}).get("delivery_mode") == "live" if (case.get("correction_draft") or {}).get("delivery_mode") else bool(case.get("has_live_gmail")),
+                "attachments": (case.get("correction_draft") or {}).get("attachments") or case.get("draft_attachments", []),
+                "prepared_at": (case.get("correction_draft") or {}).get("prepared_at"),
+                "sent_at": (case.get("correction_draft") or {}).get("sent_at"),
+                "sent_by": (case.get("correction_draft") or {}).get("sent_by"),
             }
-            if case.get("gmail_draft_id")
+            if (case.get("correction_draft") and (case.get("correction_draft") or {}).get("subject"))
+            or case.get("gmail_draft_id")
+            or case.get("draft_subject")
+            or case.get("draft_body")
             else None
         ),
     }
+
+
+def required_review_fields(case: dict[str, Any], comparisons: list[dict[str, Any]]) -> list[str]:
+    """Keep the original issues visible even after a reviewer supplies a value."""
+    required = set(case.get("required_review_fields") or [])
+    for comparison in comparisons:
+        if (
+            not comparison["matches"]
+            or comparison["low_confidence"]
+            or any(comparison[role]["value"] in (None, "") for role in ("si", "bl"))
+        ):
+            required.add(comparison["field"])
+    # Some cases are routed for document-level uncertainty with no flagged field.
+    if not required and (case.get("result") or {}).get("status") == "NEEDS_REVIEW":
+        required.update(field for field, _ in VERIFIED_FIELDS)
+    required.update(case.get("field_reviews") or {})
+    return [field for field, _ in VERIFIED_FIELDS if field in required]
 
 
 def dashboard_view(cases: list[dict[str, Any]], period: str) -> dict[str, Any]:

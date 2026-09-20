@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     fallback_model: str = "gemini-2.5-flash"
     max_upload_bytes: int = Field(default=15 * 1024 * 1024, ge=1)
     telegram_uploads_per_hour: int = Field(default=10, ge=1)
+    gmail_reconcile_limit: int = Field(default=50, ge=1, le=500)
+    gmail_reconcile_schedule: str = "0 * * * *"
     processing_lease_seconds: int = Field(default=600, ge=60)
 
     @property

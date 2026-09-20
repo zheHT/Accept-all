@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, Search, SearchX, UserRoundSearch, X } from "lucide-react";
+import { ChevronDown, RefreshCw, Search, SearchX, UserRoundSearch, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { StatBar, type StatSegment } from "@/components/ui/stat-bar";
 import { useToast } from "@/components/ui/toast";
@@ -17,8 +17,11 @@ import {
 import { readParam, writeParam } from "@/lib/url-state";
 import {
   ApiError,
+  confirmSentDraft,
   getCase,
   getReviews,
+  prepareDraft,
+  reviewField,
   reviewCase as reviewApiCase,
   sendDraft,
   updateDraft,
@@ -60,15 +63,20 @@ export function ReviewView() {
   const [reason, setReason] = useState<ReasonFilter>("all");
   const [group, setGroup] = useState<GroupFilter>("none");
   const [sort, setSort] = useState<SortOrder>("oldest");
+  const [displayLimit, setDisplayLimit] = useState(25);
+  const [isPreparingDraft, setIsPreparingDraft] = useState(false);
+  const [isConfirmingSent, setIsConfirmingSent] = useState(false);
 
   useEffect(() => {
     if (!liveReviews.data) return;
     const incoming = liveReviews.data.items.map(reviewSummary);
     setCases((current) => {
       const activeResolved = current.find((item) => item.id === openId && item.status === "resolved");
-      return activeResolved && !incoming.some((item) => item.id === activeResolved.id)
-        ? [activeResolved, ...incoming]
-        : incoming;
+      const activeDetail = current.find((item) => item.id === openId && item.comparisonFields?.length);
+      const merged = incoming.map((item) => item.id === activeDetail?.id ? activeDetail : item);
+      return activeResolved && !merged.some((item) => item.id === activeResolved.id)
+        ? [activeResolved, ...merged]
+        : merged;
     });
   }, [liveReviews.data, openId]);
 
@@ -118,22 +126,36 @@ export function ReviewView() {
         ? activeDetail
         : liveReviews.data?.items.find((item) => item.case_id === id);
       if (!source) return;
-      const apiDecision = decision.type === "confirm" ? "APPROVE" : "DECLINE";
-      const note = [decision.notes, decision.type === "correct" ? `Reviewer correction: ${decision.value}` : ""].filter(Boolean).join("\n");
+      const field = decision.field || source.low_confidence_fields[0] || source.defect_fields[0] || activeDetail?.comparisons[0]?.field;
+      if (!field) return;
+      const note = decision.notes;
       try {
-        const updated = await reviewApiCase(source, apiDecision, note);
+        const updated = await reviewField(
+          source.case_id,
+          field,
+          source.version,
+          decision.type,
+          note,
+          decision.type === "correct" ? decision.value || undefined : undefined,
+          decision.documentRole || "BL",
+        );
         setActiveDetail(updated);
-        setCases((current) => current.map((item) => item.id === id ? { ...item, decision, status: "resolved" } : item));
+        setCases((current) => current.map((item) => item.id === id ? reviewDetail(updated) : item));
         await liveReviews.refresh();
         toast({
-          title: `${id} ${apiDecision === "APPROVE" ? "approved" : "declined"}`,
-          description: apiDecision === "DECLINE" ? "A safeguarded Gmail draft is now available on the case." : "The review decision was recorded.",
+          title: `${field} decision saved`,
+          description: decision.type === "unreadable" ? "The field remains visible as unresolved for follow-up." : "The structured review decision was recorded; the case verdict is unchanged.",
           tone: "success",
         });
       } catch (error) {
-        if (error instanceof ApiError && error.status === 409) await liveReviews.refresh();
+        if (error instanceof ApiError && error.status === 409) {
+          const refreshed = await getCase(id);
+          setActiveDetail(refreshed);
+          setCases((current) => current.map((item) => item.id === id ? reviewDetail(refreshed) : item));
+          await liveReviews.refresh();
+        }
         toast({
-          title: error instanceof ApiError && error.status === 409 ? "Case changed while it was open" : "Review action failed",
+          title: error instanceof ApiError && error.status === 409 ? "Case changed while it was open" : "Field review failed",
           description: error instanceof ApiError && error.status === 409 ? "The queue was refreshed. Please inspect the case and repeat the action." : error instanceof Error ? error.message : "Please retry.",
           tone: "warning",
         });
@@ -166,19 +188,117 @@ export function ReviewView() {
     try {
       const updated = await sendDraft(activeDetail.case_id, activeDetail.version, activeDetail.draft.content_hash);
       setActiveDetail(updated);
-      toast({ title: "Correction email sent", tone: "success" });
+      setCases((current) => current.map((item) => (item.id === activeDetail.case_id ? reviewDetail(updated) : item)));
+      await liveReviews.refresh();
+      toast({
+        title: "Correction email sent",
+        description: "Draft delivered via live Gmail. Case marked as DECLINE with SENT status.",
+        tone: "success",
+      });
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         const refreshed = await getCase(activeDetail.case_id);
         setActiveDetail(refreshed);
       }
       toast({
-        title: error instanceof ApiError && error.status === 409 ? "Draft changed before sending" : "Draft send failed",
-        description: error instanceof ApiError && error.status === 409 ? "The latest draft was loaded. Review it before sending." : error instanceof Error ? error.message : "Please retry.",
+        title: error instanceof ApiError && error.status === 404 ? "Route not found (backend version mismatch)" : error instanceof ApiError && error.status === 409 ? "Draft changed before sending" : "Draft send failed",
+        description: error instanceof Error ? error.message : "Please retry.",
         tone: "warning",
       });
     }
-  }, [activeDetail, toast]);
+  }, [activeDetail, liveReviews, toast]);
+
+  const finalizeCase = useCallback(async () => {
+    if (!activeDetail || (activeDetail.unresolved_fields?.length ?? 1) > 0) return;
+    try {
+      await reviewApiCase(activeDetail, "APPROVE", "All structured field reviews completed.");
+      const refreshed = await getCase(activeDetail.case_id);
+      setActiveDetail(refreshed);
+      setCases((current) => current.map((item) => item.id === activeDetail.case_id ? reviewDetail(refreshed) : item));
+      await liveReviews.refresh();
+      toast({ title: "Case finalized", description: "The verification result was approved after all field reviews were completed.", tone: "success" });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        const refreshed = await getCase(activeDetail.case_id);
+        setActiveDetail(refreshed);
+      }
+      toast({
+        title: error instanceof ApiError && error.status === 404 ? "Route not found (backend version mismatch)" : "Case finalization failed",
+        description: error instanceof Error ? error.message : "Resolve every field and retry.",
+        tone: "warning",
+      });
+    }
+  }, [activeDetail, liveReviews, toast]);
+
+  const prepareCorrectionDraft = useCallback(async () => {
+    if (!activeDetail) return;
+    setIsPreparingDraft(true);
+    try {
+      const updated = await prepareDraft(activeDetail.case_id, activeDetail.version);
+      setActiveDetail(updated);
+      setCases((current) => current.map((item) => (item.id === activeDetail.case_id ? reviewDetail(updated) : item)));
+      await liveReviews.refresh();
+
+      if (updated.draft?.gmail_url) {
+        const opened = window.open(updated.draft.gmail_url, "_blank");
+        if (!opened) {
+          toast({
+            title: "Pop-up blocked",
+            description: "Please allow pop-ups or click 'Open in Gmail' to view the draft.",
+            tone: "warning",
+          });
+        }
+      }
+
+      toast({
+        title: "AI correction draft prepared",
+        description: updated.draft?.delivery_mode === "live"
+          ? "Draft saved to shared Gmail mailbox with attachments. Review below before sending."
+          : "Draft ready in Gmail compose window. Review below and attach documents manually.",
+        tone: "success",
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        const refreshed = await getCase(activeDetail.case_id);
+        setActiveDetail(refreshed);
+      }
+      toast({
+        title: error instanceof ApiError && error.status === 404 ? "Route not found (backend version mismatch)" : "Correction draft failed",
+        description: error instanceof Error ? error.message : "Please retry.",
+        tone: "warning",
+      });
+    } finally {
+      setIsPreparingDraft(false);
+    }
+  }, [activeDetail, liveReviews, toast]);
+
+  const confirmSentCorrectionDraft = useCallback(async () => {
+    if (!activeDetail) return;
+    setIsConfirmingSent(true);
+    try {
+      const updated = await confirmSentDraft(activeDetail.case_id, activeDetail.version);
+      setActiveDetail(updated);
+      setCases((current) => current.map((item) => (item.id === activeDetail.case_id ? reviewDetail(updated) : item)));
+      await liveReviews.refresh();
+      toast({
+        title: "Sent status confirmed",
+        description: "Case marked as DECLINE with SENT status and recorded in audit log.",
+        tone: "success",
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        const refreshed = await getCase(activeDetail.case_id);
+        setActiveDetail(refreshed);
+      }
+      toast({
+        title: "Confirmation failed",
+        description: error instanceof Error ? error.message : "Please retry.",
+        tone: "warning",
+      });
+    } finally {
+      setIsConfirmingSent(false);
+    }
+  }, [activeDetail, liveReviews, toast]);
 
   const filtersActive = query.trim() !== "" || reason !== "all" || group !== "none" || sort !== "oldest";
 
@@ -213,6 +333,8 @@ export function ReviewView() {
     });
   }, [cases, query, reason, group, sort]);
 
+  const visibleRows = useMemo(() => rows.slice(0, displayLimit), [rows, displayLimit]);
+
   const summarySegments = useMemo<StatSegment[]>(() => {
     const pending = cases.filter((item) => item.status !== "resolved");
     const incomplete = pending.filter((item) => ["unreadable_document", "missing_information"].includes(item.reasonCode)).length;
@@ -246,6 +368,12 @@ export function ReviewView() {
         caseDetail={activeDetail}
         onBack={closeCase}
         onSubmit={(decision) => void submitDecision(activeCase.id, decision)}
+        onFinalize={() => void finalizeCase()}
+        onPrepareDraft={() => void prepareCorrectionDraft()}
+        onDeclineCase={() => void prepareCorrectionDraft()}
+        onConfirmSentDraft={() => void confirmSentCorrectionDraft()}
+        preparingDraft={isPreparingDraft}
+        confirmingSent={isConfirmingSent}
         onSaveDraft={(subject, body) => void saveDraft(subject, body)}
         onSendDraft={() => void deliverDraft()}
       />
@@ -321,7 +449,18 @@ export function ReviewView() {
           </div>
         </div>
 
-        <div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void liveReviews.refresh()}
+            disabled={liveReviews.loading}
+            aria-label="Refresh review queue"
+            title="Refresh review queue"
+            className="btn-glass active:scale-95"
+          >
+            <RefreshCw className={cn("size-3.5", liveReviews.loading && "animate-spin")} />
+            Refresh
+          </button>
           <button
             type="button"
             onClick={clearFilters}
@@ -348,7 +487,9 @@ export function ReviewView() {
             </p>
           </div>
           <span className="tabular shrink-0 text-[12px] text-ink-400">
-            {rows.length} of {cases.filter((item) => item.status !== "resolved").length} pending cases
+            {visibleRows.length < rows.length
+              ? `Showing ${visibleRows.length} of ${rows.length} cases`
+              : `${rows.length} of ${cases.filter((item) => item.status !== "resolved").length} pending cases`}
           </span>
         </header>
 
@@ -392,7 +533,7 @@ export function ReviewView() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((item) => {
+                {visibleRows.map((item) => {
                   const status = REVIEW_STATUS_META[item.status];
                   return (
                     <tr
@@ -472,6 +613,18 @@ export function ReviewView() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {rows.length > displayLimit && (
+          <div className="flex justify-center border-t border-line py-3">
+            <button
+              type="button"
+              onClick={() => setDisplayLimit((prev) => prev + 25)}
+              className="btn-glass text-[12.5px]"
+            >
+              Show more ({rows.length - displayLimit} remaining)
+            </button>
           </div>
         )}
       </section>

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -53,6 +53,19 @@ class DocumentType(StrEnum):
     BL = "BL"
     OTHER = "OTHER"
     UNKNOWN = "UNKNOWN"
+
+
+class DocumentRoute(BaseModel):
+    filename: str
+    document_type: DocumentType
+
+
+class EmailClassification(BaseModel):
+    category: EmailCategory
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    rationale: str
+    assumptions: list[str] = Field(default_factory=list)
+    documents: list[DocumentRoute] = Field(default_factory=list)
 
 
 class ExtractedField(BaseModel):
@@ -134,6 +147,22 @@ class ReviewRequest(BaseModel):
     decision: ReviewDecision
     expected_version: int = Field(ge=0)
     note: str = ""
+
+
+class FieldReviewRequest(BaseModel):
+    decision: Literal["confirm", "correct", "unreadable"]
+    expected_version: int = Field(ge=0)
+    document_role: Literal["SI", "BL"] = "BL"
+    value: str | None = Field(default=None, max_length=2000)
+    note: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_correction(self) -> FieldReviewRequest:
+        if self.decision == "correct" and not (self.value or "").strip():
+            raise ValueError("a correction requires a non-empty value")
+        if self.value is not None:
+            self.value = self.value.strip()
+        return self
 
 
 class ExplainRequest(BaseModel):

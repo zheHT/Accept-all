@@ -28,7 +28,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const { unreadEmails, pendingReviews } = useWorkspaceCounts();
   const isActive = (href: string) =>
-    href === "/" ? pathname === "/" : pathname.startsWith(href);
+    pathname ? (href === "/" ? pathname === "/" : pathname.startsWith(href)) : false;
 
   // Badges track what is still untouched, so they fall as the operator works.
   const primaryNav: NavItem[] = [
@@ -51,7 +51,7 @@ export function Sidebar() {
 
   return (
     <>
-    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[264px] flex-col border-r border-edge bg-surface/55 backdrop-blur-2xl backdrop-saturate-150 lg:flex">
+    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[264px] flex-col border-r border-edge bg-surface/55 backdrop-blur-xl backdrop-saturate-125 lg:flex">
       <div className="flex h-16 items-center gap-3 px-6">
         <span className="grid size-9 place-items-center rounded-xl bg-gradient-to-br from-brand-400 via-brand-600 to-brand-800 shadow-brand">
           <ShieldCheck className="size-5 text-white" strokeWidth={2.25} />

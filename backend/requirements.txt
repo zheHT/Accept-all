@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-multipart
+google-genai
+pydantic>=2,<3
+python-dotenv
+markitdown[docx,xlsx]>=0.1.6,<0.2
+pypdf
+pytest
+pytest-asyncio
+httpx

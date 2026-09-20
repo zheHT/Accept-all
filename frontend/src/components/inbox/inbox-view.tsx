@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, Paperclip, Search, SearchX, X } from "lucide-react";
+import { ChevronDown, Paperclip, RefreshCw, Search, SearchX, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
 import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
@@ -19,14 +19,20 @@ import {
 import { getCase, getInbox } from "@/lib/api";
 import { inboxDetail, inboxSummary } from "@/lib/live-view-models";
 import { useLiveQuery } from "@/lib/use-live-query";
+import {
+  filterInboxEmails,
+  OTHER_REQUEST_TYPES,
+  type InboxDateFilter,
+  type InboxSortOrder,
+  type InboxStatusFilter,
+  type InboxTypeFilter,
+} from "./inbox-filter";
 
 /** "other_requests" groups the three non-verification, non-spam categories. */
-type TypeFilter = "all" | EmailClassification | "other_requests";
-type StatusFilter = "all" | EmailStatus;
-type DateFilter = "all" | "today" | "yesterday";
-type SortOrder = "newest" | "oldest" | "confidence";
-
-const OTHER_REQUEST_TYPES: EmailClassification[] = ["new_si", "invoice_query", "general"];
+type TypeFilter = InboxTypeFilter;
+type StatusFilter = InboxStatusFilter;
+type DateFilter = InboxDateFilter;
+type SortOrder = InboxSortOrder;
 
 const TYPE_OPTIONS: Array<{ value: TypeFilter; label: string }> = [
   { value: "all", label: "All Types" },
@@ -70,7 +76,9 @@ export function InboxView() {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [date, setDate] = useState<DateFilter>("all");
   const [sort, setSort] = useState<SortOrder>("newest");
+  const [includeSpam, setIncludeSpam] = useState(false);
   const [selected, setSelected] = useState<InboxEmail | null>(null);
+  const [displayLimit, setDisplayLimit] = useState(25);
 
   useEffect(() => {
     if (inbox.data) setEmails(inbox.data.items.map(inboxSummary));
@@ -135,7 +143,7 @@ export function InboxView() {
           ? "other"
           : "all";
 
-  const selectGroup = (next: IntakeGroup) =>
+  const selectGroup = (next: IntakeGroup) => {
     setType(
       next === "checks"
         ? "document_comparison"
@@ -145,9 +153,16 @@ export function InboxView() {
             ? "other_requests"
             : "all",
     );
+    setIncludeSpam(next === "all" || next === "spam");
+  };
+
+  const selectType = (next: TypeFilter) => {
+    setType(next);
+    setIncludeSpam(next === "all" || next === "spam");
+  };
 
   const filtersActive =
-    query.trim() !== "" || type !== "all" || status !== "all" || date !== "all" || sort !== "newest";
+    query.trim() !== "" || type !== "all" || status !== "all" || date !== "all" || sort !== "newest" || includeSpam;
 
   const clearFilters = () => {
     setQuery("");
@@ -155,31 +170,14 @@ export function InboxView() {
     setStatus("all");
     setDate("all");
     setSort("newest");
+    setIncludeSpam(false);
   };
 
   const rows = useMemo(() => {
-    const needle = query.trim().toLowerCase();
+    return filterInboxEmails(emails, { query, type, status, date, sort, includeSpam });
+  }, [emails, query, type, status, date, sort, includeSpam]);
 
-    const filtered = emails.filter((email) => {
-      if (type === "other_requests" && !OTHER_REQUEST_TYPES.includes(email.classification)) {
-        return false;
-      }
-      if (type !== "all" && type !== "other_requests" && email.classification !== type) return false;
-      if (status !== "all" && email.status !== status) return false;
-      if (date !== "all" && email.receivedDay !== date) return false;
-      if (!needle) return true;
-      return [email.sender, email.senderEmail, email.subject, email.preview, email.shipment ?? ""]
-        .join(" ")
-        .toLowerCase()
-        .includes(needle);
-    });
-
-    return filtered.sort((a, b) => {
-      if (sort === "confidence") return a.confidence - b.confidence;
-      if (sort === "oldest") return a.receivedOrder - b.receivedOrder;
-      return b.receivedOrder - a.receivedOrder;
-    });
-  }, [emails, query, type, status, date, sort]);
+  const visibleRows = useMemo(() => rows.slice(0, displayLimit), [rows, displayLimit]);
 
   if (inbox.loading && !inbox.data) return <LoadingState label="Loading inbox" />;
   if (inbox.error && !inbox.data) {
@@ -220,7 +218,7 @@ export function InboxView() {
               label="Classification filter"
               value={type}
               options={TYPE_OPTIONS}
-              onChange={setType}
+              onChange={selectType}
             />
             <FilterSelect
               label="Status filter"
@@ -243,7 +241,18 @@ export function InboxView() {
           </div>
         </div>
 
-        <div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void sync()}
+            disabled={inbox.loading}
+            aria-label="Refresh inbox"
+            title="Refresh inbox"
+            className="btn-glass active:scale-95"
+          >
+            <RefreshCw className={cn("size-3.5", inbox.loading && "animate-spin")} />
+            Refresh
+          </button>
           <button
             type="button"
             onClick={clearFilters}
@@ -270,7 +279,9 @@ export function InboxView() {
             </p>
           </div>
           <span className="tabular shrink-0 text-[12px] text-ink-400">
-            {rows.length} of {totals.total} emails
+            {visibleRows.length < rows.length
+              ? `Showing ${visibleRows.length} of ${rows.length} emails`
+              : `${rows.length} of ${totals.total} emails`}
           </span>
         </header>
 
@@ -314,7 +325,7 @@ export function InboxView() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((email) => {
+                {visibleRows.map((email) => {
                   const meta = CLASSIFICATION_META[email.classification];
                   const isSpam = email.classification === "spam";
                   const read = isEmailRead(email.id);
@@ -426,6 +437,18 @@ export function InboxView() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {rows.length > displayLimit && (
+          <div className="flex justify-center border-t border-line py-3">
+            <button
+              type="button"
+              onClick={() => setDisplayLimit((prev) => prev + 25)}
+              className="btn-glass text-[12.5px]"
+            >
+              Show more ({rows.length - displayLimit} remaining)
+            </button>
           </div>
         )}
       </section>

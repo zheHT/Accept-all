@@ -29,10 +29,37 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}, retry = 
     }
   }
   if (response.status === 401) authorizationFailed();
-  if (!response.ok) throw new ApiError((await response.text()) || response.statusText, response.status);
+  if (!response.ok) {
+    let message = response.statusText;
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        message = json.detail || json.message || text || response.statusText;
+      } catch {
+        message = text || response.statusText;
+      }
+    } catch {
+      // keep statusText fallback
+    }
+    if (response.status === 404 && (message === "Not Found" || message === "")) {
+      message = "Endpoint not found (404). The backend service appears to be running an older build without this route.";
+    }
+    throw new ApiError(message, response.status);
+  }
   if (response.status === 204) return undefined as T;
   const contentType = response.headers.get("content-type") || "";
   return (contentType.includes("application/json") ? await response.json() : await response.text()) as T;
+}
+
+export function formatApiErrorMessage(error: unknown, fallback = "Please retry."): string {
+  if (error instanceof ApiError) {
+    return error.message || fallback;
+  }
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+  return fallback;
 }
 
 export type CaseStatus = "OK" | "MISMATCH" | "NEEDS_REVIEW" | null;
@@ -53,8 +80,11 @@ export interface CaseSummary {
   review_decision?: "APPROVE" | "DECLINE" | null;
   low_confidence: boolean;
   low_confidence_fields: string[];
+  confidence?: number | null;
   version: number;
   draft_state?: string | null;
+  unresolved_fields?: string[];
+  review_progress?: { total: number; completed: number };
 }
 export interface PublicDocument {
   document_id: string;
@@ -87,7 +117,36 @@ export interface CaseDetail extends CaseSummary {
   assumptions: unknown[];
   documents: PublicDocument[];
   comparisons: FieldComparison[];
-  draft: { state: string; subject: string; body: string; content_hash: string } | null;
+  field_reviews?: Record<string, FieldReview>;
+  review_history?: FieldReview[];
+  draft: {
+    state: string;
+    subject: string;
+    body: string;
+    content_hash: string;
+    delivery_mode?: "live" | "compose" | null;
+    origin?: "ai" | "template" | null;
+    gmail_url?: string | null;
+    has_live_gmail?: boolean;
+    attachments?: string[];
+    prepared_at?: string | null;
+    sent_at?: string | null;
+    sent_by?: string | null;
+  } | null;
+}
+export interface FieldReview {
+  field: string;
+  decision: "confirm" | "correct" | "unreadable";
+  value: string | null;
+  document_role: "SI" | "BL";
+  note: string;
+  reviewer: string;
+  reviewer_id?: string | null;
+  at: string;
+  original_si?: FieldValue;
+  original_bl?: FieldValue;
+  effective_values?: { si: string | number | null; bl: string | number | null };
+  resolved: boolean;
 }
 export interface PagedResponse<T> { items: T[]; next_cursor: string | null }
 export interface DashboardResponse {
@@ -98,13 +157,23 @@ export interface DashboardResponse {
   attention_items: CaseSummary[];
   recent_items: CaseSummary[];
 }
+export interface SessionInfo {
+  uid: string;
+  is_admin: boolean;
+}
 export interface PlatformSettings {
   confidence_threshold: number;
   mismatch_alerts_enabled: boolean;
   low_confidence_requires_review: true;
   missing_value_requires_review: true;
   unreadable_requires_review: true;
-  gmail: { address: string; oauth_status: string; watch_expiration?: string | null; history_id_present: boolean };
+  gmail: {
+    address: string;
+    oauth_status: string;
+    watch_expiration?: string | null;
+    history_id_present: boolean;
+    client_configured?: boolean;
+  };
 }
 export interface KnowledgeBaseWeek {
   week: string;
@@ -133,13 +202,86 @@ export interface AssumptionRecord {
 }
 
 export const getDashboard = (period: DashboardResponse["period"], signal?: AbortSignal) => apiFetch<DashboardResponse>(`/api/dashboard?period=${period}`, { signal });
-export const getInbox = (signal?: AbortSignal) => apiFetch<PagedResponse<CaseSummary>>("/api/inbox?limit=200", { signal });
-export const getCases = (signal?: AbortSignal) => apiFetch<PagedResponse<CaseSummary>>("/api/cases?limit=200", { signal });
-export const getReviews = (signal?: AbortSignal) => apiFetch<PagedResponse<CaseSummary>>("/api/reviews?limit=200", { signal });
+export const getInbox = (signal?: AbortSignal, limit = 50) => apiFetch<PagedResponse<CaseSummary>>(`/api/inbox?limit=${limit}`, { signal });
+export async function getCases(signal?: AbortSignal, limit = 200): Promise<PagedResponse<CaseSummary>> {
+  let cursor: string | null = null;
+  const items: CaseSummary[] = [];
+  do {
+    const url: string = `/api/cases?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+    const page: PagedResponse<CaseSummary> = await apiFetch<PagedResponse<CaseSummary>>(url, { signal });
+    items.push(...page.items);
+    cursor = page.next_cursor;
+  } while (cursor);
+  return { items, next_cursor: null };
+}
+export const getReviews = (signal?: AbortSignal, limit = 50) => apiFetch<PagedResponse<CaseSummary>>(`/api/reviews?limit=${limit}`, { signal });
+export const getSession = (signal?: AbortSignal) => apiFetch<SessionInfo>("/api/session", { signal });
 export const getCase = (id: string, signal?: AbortSignal) => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(id)}`, { signal });
+export const getDocumentDownload = (caseId: string, documentId: string) =>
+  apiFetch<{ url: string }>(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}/download`);
+
+/** Fetch the source bytes with the configured auth token (signed file:// URLs are not reliable in-browser). */
+export interface DocumentContent {
+  blob: Blob;
+  pages: number | null;
+}
+
+export async function getDocumentContent(caseId: string, documentId: string, signal?: AbortSignal): Promise<DocumentContent> {
+  const path = `/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}/content`;
+  const request = async (forceRefresh: boolean) => {
+    const token = await tokenProvider(forceRefresh);
+    const headers = new Headers();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    return fetch(`${API_BASE_URL}${path}`, { headers, signal, cache: "no-store" });
+  };
+  let response = await request(false);
+  if (response.status === 401) {
+    response = await request(true);
+  }
+  if (!response.ok) {
+    let message = response.statusText;
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        message = json.detail || json.message || text || response.statusText;
+      } catch {
+        message = text || response.statusText;
+      }
+    } catch {
+      // keep statusText fallback
+    }
+    throw new ApiError(message, response.status);
+  }
+  const pageHeader = Number(response.headers.get("X-Document-Page-Count"));
+  return { blob: await response.blob(), pages: Number.isFinite(pageHeader) && pageHeader > 0 ? pageHeader : null };
+}
+
+export const reviewField = (
+  caseId: string,
+  field: string,
+  expectedVersion: number,
+  decision: FieldReview["decision"],
+  note = "",
+  value?: string,
+  documentRole: FieldReview["document_role"] = "BL",
+) => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/fields/${encodeURIComponent(field)}/review`, {
+  method: "PUT",
+  body: JSON.stringify({ decision, expected_version: expectedVersion, note, ...(value !== undefined ? { value } : {}), document_role: documentRole }),
+});
 export const retryCase = (item: CaseSummary) => apiFetch<CaseSummary>(`/api/cases/${encodeURIComponent(item.case_id)}/retry?expected_version=${item.version}`, { method: "POST" });
 export const reviewCase = (item: CaseSummary, decision: "APPROVE" | "DECLINE", note = "") => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(item.case_id)}/review`, { method: "POST", body: JSON.stringify({ decision, expected_version: item.version, note }) });
 export const updateDraft = (id: string, version: number, subject: string, body: string) => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(id)}/draft`, { method: "PUT", body: JSON.stringify({ subject, body, expected_version: version }) });
+export const prepareDraft = (caseId: string, expectedVersion?: number) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/draft/prepare`, {
+    method: "POST",
+    body: JSON.stringify({ expected_version: expectedVersion }),
+  });
+export const confirmSentDraft = (caseId: string, expectedVersion: number) =>
+  apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/draft/confirm-sent`, {
+    method: "POST",
+    body: JSON.stringify({ expected_version: expectedVersion }),
+  });
 export const sendDraft = (id: string, version: number, hash: string) => apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(id)}/draft/send`, { method: "POST", body: JSON.stringify({ expected_version: version, expected_content_hash: hash }) });
 export const getSettings = (signal?: AbortSignal) => apiFetch<PlatformSettings>("/api/settings", { signal });
 export const saveSettings = (value: Pick<PlatformSettings, "confidence_threshold" | "mismatch_alerts_enabled">) => apiFetch<PlatformSettings>("/api/settings", { method: "PUT", body: JSON.stringify(value) });

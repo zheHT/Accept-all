@@ -283,6 +283,13 @@ class KnowledgePublisher:
                     },
                 ).execute()
 
+                build("drive", "v3", credentials=credentials).permissions().create(
+                    fileId=doc_id,
+                    body={"type": "anyone", "role": "reader"},
+                    sendNotificationEmail=False,
+                    fields="id",
+                ).execute()
+
                 logger.info("Published %s to Google Docs: %s", title, drive_url)
                 return doc_id, drive_url, preview_uri
             except Exception as exc:

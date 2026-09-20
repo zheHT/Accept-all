@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
 import { DocumentPreview, type PreviewDocument } from "@/components/ui/document-preview";
+import { DocumentComparison } from "@/components/ui/document-comparison";
 import { pendingDocumentBody } from "@/lib/document-text";
 import { ClassificationBadge, EmailStatusBadge } from "./badges";
 import {
@@ -23,6 +24,9 @@ import {
   type InboxEmail,
   type MailAttachment,
 } from "@/lib/inbox-data";
+import { getCase } from "@/lib/api";
+import { reviewDetail } from "@/lib/live-view-models";
+import type { DocumentEvidence, ReviewCase } from "@/lib/review-data";
 
 /**
  * Email detail view.
@@ -41,6 +45,8 @@ export function EmailDrawer({
   const router = useRouter();
   const toast = useToast();
   const [preview, setPreview] = useState<PreviewDocument | null>(null);
+  const [comparisonCase, setComparisonCase] = useState<ReviewCase | null>(null);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
   useEffect(() => {
     if (!email) return;
 
@@ -57,25 +63,56 @@ export function EmailDrawer({
     };
   }, [email, onClose]);
 
-  /** Opens the attachment's extracted text; SI/BL render from the linked case. */
+  /** Opens the shared document comparison workspace; SI/BL render from the linked case. */
   const openAttachment = useCallback(
     (file: MailAttachment) => {
       if (!email) return;
+      if (email.caseRef) {
+        void openComparison();
+        return;
+      }
+      const siAtt = email.attachments.find((a) => a.role === "SI") || file;
+      const blAtt = email.attachments.find((a) => a.role === "BL" && a.name !== siAtt.name);
+      const bodySi = (siAtt.preview ? { lines: siAtt.preview, problemLines: [] } : null) ?? pendingDocumentBody(siAtt.name, email.sender);
+      const bodyBl = blAtt ? ((blAtt.preview ? { lines: blAtt.preview, problemLines: [] } : null) ?? pendingDocumentBody(blAtt.name, email.sender)) : null;
 
-      const body =
-        (file.preview ? { lines: file.preview, problemLines: [] } : null) ??
-        pendingDocumentBody(file.name, email.sender);
-
-      setPreview({
-        name: file.name,
-        role: file.role,
-        pages: file.pages,
-        sizeLabel: file.sizeLabel,
-        scanned: file.scanned,
-        lines: body.lines,
-        problemLines: body.problemLines,
+      setComparisonCase({
+        id: email.id,
+        caseId: email.id,
+        shipment: email.shipment || email.subject || "Email Attachment",
+        problemField: "Source documents",
+        reason: "Inbox attachment preview",
+        reasonCode: "low_confidence",
+        reasonDetail: "Email attachment inspection",
+        confidence: email.confidence,
+        status: "pending",
+        created: email.receivedTime,
+        createdOrder: 0,
+        si: {
+          name: siAtt.name,
+          pages: siAtt.pages,
+          scanned: siAtt.scanned,
+          snippet: bodySi.lines,
+          fullLines: bodySi.lines,
+          problemLines: bodySi.problemLines,
+          highlightIndex: -1,
+          extractedLabel: "Extracted value",
+          extractedValue: null,
+        },
+        bl: (blAtt && bodyBl) ? {
+          name: blAtt.name,
+          pages: blAtt.pages,
+          scanned: blAtt.scanned,
+          snippet: bodyBl.lines,
+          fullLines: bodyBl.lines,
+          problemLines: bodyBl.problemLines,
+          highlightIndex: -1,
+          extractedLabel: "Extracted value",
+          extractedValue: null,
+        } : undefined as unknown as DocumentEvidence,
       });
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [email],
   );
 
@@ -112,6 +149,26 @@ export function EmailDrawer({
     });
     onClose();
     router.push(email.caseRef ? `/cases?case=${email.caseRef}` : "/cases");
+  };
+
+  const openComparison = async () => {
+    if (!email?.caseRef) {
+      if (email?.attachments.length) {
+        openAttachment(email.attachments[0]);
+        return;
+      }
+      toast({ title: "Verification case is not ready", description: "Open the case after extraction finishes.", tone: "warning" });
+      return;
+    }
+    setComparisonLoading(true);
+    try {
+      const detail = await getCase(email.caseRef);
+      setComparisonCase(reviewDetail(detail));
+    } catch (error) {
+      toast({ title: "Document comparison is unavailable", description: error instanceof Error ? error.message : "Please retry.", tone: "warning" });
+    } finally {
+      setComparisonLoading(false);
+    }
   };
 
   return (
@@ -238,6 +295,15 @@ export function EmailDrawer({
                 )}
                 <ArrowRight className="size-4" strokeWidth={2.25} />
               </button>
+              <button
+                type="button"
+                onClick={() => void openComparison()}
+                disabled={comparisonLoading}
+                className="btn-glass mt-2 w-full justify-center"
+              >
+                <ScanSearch className="size-4" strokeWidth={2.25} />
+                {comparisonLoading ? "Loading documents…" : "Compare source documents"}
+              </button>
             </section>
           ) : (
             <section className="mt-5 rounded-xl border border-line bg-surface/50 p-4">
@@ -314,6 +380,16 @@ export function EmailDrawer({
       </section>
 
       <DocumentPreview document={preview} onClose={() => setPreview(null)} />
+      {comparisonCase && (
+        <DocumentComparison
+          si={comparisonCase.si}
+          bl={comparisonCase.bl}
+          problemField={comparisonCase.problemField}
+          open
+          onClose={() => setComparisonCase(null)}
+          heading={`Document comparison · ${email.shipment || email.id}`}
+        />
+      )}
     </div>
   );
 }

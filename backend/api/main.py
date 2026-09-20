@@ -1,19 +1,30 @@
 from __future__ import annotations
 
 import hmac
+import html
+import logging
 import re
 import secrets
 import time
+from contextlib import suppress
+from io import BytesIO
+from datetime import date
 from typing import Annotated, Any
+from urllib.parse import quote
+
+logger = logging.getLogger(__name__)
 
 import google.auth.transport.requests
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from google.api_core.exceptions import Conflict
+from fastapi.responses import HTMLResponse, Response
+from google.api_core.exceptions import Conflict, GoogleAPIError, NotFound
 from google.cloud import secretmanager
 from google.oauth2 import id_token
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
+from backend.api.field_review import field_review_changes
 from backend.api.markdown_preview import render_preview_document
 from backend.api.views import (
     build_case_detail,
@@ -23,11 +34,13 @@ from backend.api.views import (
 )
 from backend.core.config import get_settings
 from backend.core.ingestion import stable_case_id
+from backend.core.repository import utcnow
 from backend.core.runtime import Runtime, build_runtime
 from backend.core.schemas import (
     DraftSendRequest,
     DraftUpdateRequest,
     ExplainRequest,
+    FieldReviewRequest,
     IngestionState,
     IngestMetadata,
     PlatformSettingsUpdate,
@@ -38,11 +51,31 @@ from backend.core.schemas import (
 from backend.core.security import content_hash, sign_state, verify_state
 from backend.core.telegram import TELEGRAM_HELP_TEXT, TELEGRAM_WELCOME_TEXT
 from backend.core.workflows import create_case_draft
+from backend.integrations.knowledge import secure_knowledge_publisher
+
+_cache_by_repo: dict[int, tuple[list[dict[str, Any]], float]] = {}
+_cache_ttl: float = 10.0
+
+
+def _get_cached_cases(runtime: Runtime) -> list[dict[str, Any]]:
+    repo_key = id(runtime.repository)
+    now = time.time()
+    cached = _cache_by_repo.get(repo_key)
+    if cached is None or (now - cached[1]) > _cache_ttl:
+        cases = runtime.repository.list_cases(limit=5000)
+        _cache_by_repo[repo_key] = (cases, now)
+        return cases
+    return cached[0]
+
+
+def _invalidate_cached_cases(runtime: Runtime) -> None:
+    _cache_by_repo.pop(id(runtime.repository), None)
 
 
 def create_app(runtime: Runtime | None = None) -> FastAPI:
     settings = runtime.settings if runtime else get_settings()
     runtime = runtime or build_runtime(settings)
+    secure_knowledge_publisher(runtime)
     app = FastAPI(title="ClassAll API", version="0.1.0")
     origins = [
         settings.dashboard_base_url.rstrip("/"),
@@ -51,14 +84,23 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         "https://gen-lang-client-0866395749.web.app",
         "https://gen-lang-client-0866395749.firebaseapp.com",
         "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
         "http://localhost:3000",
+        "http://localhost:8080",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
+        "http://127.0.0.1:3000",
     ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(dict.fromkeys(o for o in origins if o)),
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://.*\.web\.app$|^https://.*\.firebaseapp\.com$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Document-Page-Count"],
     )
     app.state.runtime = runtime
 
@@ -69,11 +111,11 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         if not x_ingest_key or not hmac.compare_digest(x_ingest_key, expected):
             raise HTTPException(401, "invalid ingestion key")
 
-    def require_reviewer(
+    def require_user(
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, Any]:
         if not settings.dashboard_auth_required:
-            return {"uid": "local-reviewer", "email": "local@example.test"}
+            return {"uid": "local-reviewer", "email": "local@example.test", "admin": True}
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(401, "Firebase bearer token required")
         try:
@@ -85,14 +127,19 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(401, "invalid Firebase token") from exc
         uid = str(claims.get("user_id") or claims.get("sub") or claims.get("uid") or "")
-        email = str(claims.get("email") or "")
+        if not uid:
+            raise HTTPException(401, "Firebase user identity required")
         claims["uid"] = uid
-        if not (
-            (uid and runtime.repository.is_reviewer(uid))
-            or (email and runtime.repository.is_reviewer(email))
-        ):
-            raise HTTPException(403, "reviewer access required")
         return claims
+
+    def require_admin(claims: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+        if claims.get("admin") is not True:
+            raise HTTPException(403, "administrator access required")
+        return claims
+
+    @app.get("/api/session")
+    def session(claims: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+        return {"uid": claims["uid"], "is_admin": claims.get("admin") is True}
 
     def get_case_or_404(case_id: str) -> dict[str, Any]:
         case = runtime.repository.get_case(case_id)
@@ -125,6 +172,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                 for upload in (attachments or [])
             ]
             case, created = runtime.ingestor.ingest(parsed.model_dump(), files)
+            if created:
+                invalidate_cached_cases()
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return {
@@ -143,6 +192,12 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         run["submission"] = run.get("results", {})
         return run
 
+    def get_cached_cases() -> list[dict[str, Any]]:
+        return _get_cached_cases(runtime)
+
+    def invalidate_cached_cases() -> None:
+        _invalidate_cached_cases(runtime)
+
     def paged_cases(
         cases: list[dict[str, Any]], limit: int, cursor: str | None
     ) -> dict[str, Any]:
@@ -155,48 +210,55 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             "next_cursor": next_cursor,
         }
 
-    @app.get("/api/dashboard", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/dashboard", dependencies=[Depends(require_user)])
     def dashboard(period: str = Query(default="week", pattern="^(day|week|month)$")) -> dict[str, Any]:
-        return dashboard_view(runtime.repository.list_cases(limit=5000), period)
+        return dashboard_view(get_cached_cases(), period)
 
-    @app.get("/api/inbox", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/inbox", dependencies=[Depends(require_user)])
     def inbox(
         limit: int = Query(default=50, ge=1, le=200), cursor: str | None = None
     ) -> dict[str, Any]:
         cases = [
             case
-            for case in runtime.repository.list_cases(limit=5000)
+            for case in get_cached_cases()
             if case.get("source_type") == "gmail"
         ]
         return paged_cases(cases, limit, cursor)
 
-    @app.get("/api/reviews", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/reviews", dependencies=[Depends(require_user)])
     def reviews(
         limit: int = Query(default=50, ge=1, le=200), cursor: str | None = None
     ) -> dict[str, Any]:
         cases = [
             case
-            for case in runtime.repository.list_cases(limit=5000)
+            for case in get_cached_cases()
             if (case.get("result") or {}).get("status") in {"MISMATCH", "NEEDS_REVIEW"}
             and not case.get("review_decision")
         ]
         return paged_cases(cases, limit, cursor)
 
-    @app.get("/api/cases", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/cases", dependencies=[Depends(require_user)])
     def list_cases(
         status: str | None = None,
         limit: int = Query(default=50, ge=1, le=200),
         cursor: str | None = None,
     ) -> dict[str, Any]:
-        cases = runtime.repository.list_cases(limit=5000, status=status)
+        if status:
+            cases = [
+                case
+                for case in get_cached_cases()
+                if (case.get("result") or {}).get("status") == status
+            ]
+        else:
+            cases = get_cached_cases()
         return paged_cases(cases, limit, cursor)
 
-    @app.get("/api/cases/{case_id}", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/cases/{case_id}", dependencies=[Depends(require_user)])
     def get_case(case_id: str) -> dict[str, Any]:
         case = get_case_or_404(case_id)
         return build_case_detail(case, runtime.repository.list_documents(case_id))
 
-    @app.post("/api/cases/{case_id}/retry", dependencies=[Depends(require_reviewer)])
+    @app.post("/api/cases/{case_id}/retry", dependencies=[Depends(require_user)])
     def retry_case(case_id: str, expected_version: int | None = None) -> dict[str, Any]:
         get_case_or_404(case_id)
         try:
@@ -206,6 +268,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                     "processing_state": ProcessingState.QUEUED.value,
                     "processing_error": None,
                     "review_decision": None,
+                    "field_reviews": {},
+                    "required_review_fields": [],
                 },
                 expected_version=expected_version,
             )
@@ -213,11 +277,12 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             raise HTTPException(409, "case changed; refresh before retrying") from exc
         message_id = runtime.publisher.publish({"case_id": case_id})
         runtime.repository.append_event(case_id, "retry_queued", {"message_id": message_id})
+        invalidate_cached_cases()
         return build_case_summary(updated)
 
     @app.get(
         "/api/cases/{case_id}/documents/{document_id}/download",
-        dependencies=[Depends(require_reviewer)],
+        dependencies=[Depends(require_user)],
     )
     def document_download(case_id: str, document_id: str) -> dict[str, str]:
         document = next(
@@ -232,16 +297,172 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             raise HTTPException(404, "document not found")
         return {"url": runtime.blobs.signed_url(document["gcs_uri"])}
 
-    @app.post("/api/cases/{case_id}/review", dependencies=[Depends(require_reviewer)])
+    @app.get(
+        "/api/cases/{case_id}/documents/{document_id}/content",
+        dependencies=[Depends(require_user)],
+    )
+    def document_content(case_id: str, document_id: str) -> Response:
+        get_case_or_404(case_id)
+        document = next(
+            (item for item in runtime.repository.list_documents(case_id)
+             if item["document_id"] == document_id),
+            None,
+        )
+        if document is None:
+            raise HTTPException(404, "document not found")
+        try:
+            data = runtime.blobs.download(document["gcs_uri"])
+        except (FileNotFoundError, NotFound, KeyError, ValueError) as exc:
+            raw_text = document.get("raw_text") or (document.get("extraction") or {}).get("raw_text")
+            if not raw_text:
+                ext_fields = (document.get("extraction") or {}).get("fields") or {}
+                if ext_fields:
+                    lines = [
+                        f"Document: {document.get('filename')}",
+                        f"Type: {(document.get('extraction') or {}).get('document_type', 'DOCUMENT')}",
+                        "",
+                        "--- PARSED TEXT LINES ---",
+                    ]
+                    for f_name, f_val in ext_fields.items():
+                        if isinstance(f_val, dict):
+                            val_str = f_val.get("value")
+                            unit = f_val.get("unit")
+                            if unit and val_str:
+                                val_str = f"{val_str} {unit}"
+                            lines.append(f"{f_name.upper()}: {val_str or 'N/A'}")
+                        else:
+                            lines.append(f"{f_name.upper()}: {f_val}")
+                    raw_text = "\n".join(lines)
+            if raw_text:
+                filename = quote(str(document.get("filename") or "document.txt"), safe="")
+                return Response(
+                    content=raw_text.encode("utf-8"),
+                    media_type="text/plain; charset=utf-8",
+                    headers={
+                        "Content-Disposition": f"inline; filename*=UTF-8''{filename}",
+                        "Cache-Control": "private, no-store",
+                        "X-Content-Type-Options": "nosniff",
+                        "X-Document-Page-Count": "1",
+                        "X-Document-Fallback": "extracted-text",
+                    },
+                )
+            raise HTTPException(404, "original document is unavailable") from exc
+        except GoogleAPIError as exc:
+            raise HTTPException(503, "document storage is temporarily unavailable") from exc
+
+        # Only PDFs may render inline. Other attachment formats are downloads,
+        # so uploaded HTML cannot execute on the API's origin.
+        is_pdf = data.lstrip().startswith(b"%PDF-")
+        filename = quote(str(document.get("filename") or "document"), safe="")
+        headers = {
+            "Content-Disposition": f"{'inline' if is_pdf else 'attachment'}; filename*=UTF-8''{filename}",
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if is_pdf:
+            with suppress(PdfReadError, ValueError, KeyError):
+                headers["X-Document-Page-Count"] = str(len(PdfReader(BytesIO(data)).pages))
+        return Response(
+            content=data,
+            media_type="application/pdf" if is_pdf else "application/octet-stream",
+            headers=headers,
+        )
+
+    @app.put("/api/cases/{case_id}/fields/{field}/review")
+    def review_field(
+        case_id: str,
+        field: str,
+        request: FieldReviewRequest,
+        reviewer: dict[str, Any] = Depends(require_user),  # noqa: B008
+    ) -> dict[str, Any]:
+        case = get_case_or_404(case_id)
+        if case.get("processing_state") in {"DRAFT", "QUEUED", "PROCESSING"}:
+            raise HTTPException(409, "wait for document processing to finish before reviewing")
+        if case.get("review_decision"):
+            raise HTTPException(409, "case is already resolved; reopen it before changing field decisions")
+        if case.get("version") != request.expected_version:
+            raise HTTPException(409, "case changed; refresh before reviewing")
+        documents = runtime.repository.list_documents(case_id)
+        try:
+            changes = field_review_changes(case, documents, field, request, reviewer)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        try:
+            # Evidence and history are saved together under the version check.
+            updated = runtime.repository.update_case(
+                case_id, changes, expected_version=request.expected_version,
+            )
+        except Conflict as exc:
+            raise HTTPException(409, "case changed; refresh before reviewing") from exc
+        invalidate_cached_cases()
+        return build_case_detail(updated, documents)
+
+    @app.post("/api/cases/{case_id}/draft/prepare", dependencies=[Depends(require_user)])
+    def prepare_draft(
+        case_id: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        case = get_case_or_404(case_id)
+        if case.get("source_type") != "gmail":
+            raise HTTPException(400, "Draft preparation is only available for Gmail-sourced cases")
+        expected_version = (payload or {}).get("expected_version")
+        if expected_version is not None and case.get("version") != expected_version:
+            raise HTTPException(409, "case changed; refresh before preparing draft")
+        documents = runtime.repository.list_documents(case_id)
+        detail = build_case_detail(case, documents)
+        try:
+            updated = create_case_draft(
+                runtime.repository,
+                runtime.gmail,
+                runtime.telegram,
+                case,
+                blobs=runtime.blobs,
+                explainer=runtime.explainer,
+                unresolved_fields=detail.get("unresolved_fields"),
+                comparisons=detail.get("comparisons"),
+                field_reviews=case.get("field_reviews"),
+                set_decline=False,
+            )
+            invalidate_cached_cases()
+            return build_case_detail(updated, documents)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            logger.exception("Failed to prepare AI correction draft for %s: %s", case_id, exc)
+            raise HTTPException(500, f"Failed to prepare correction draft: {exc}") from exc
+
+    @app.post("/api/cases/{case_id}/review", dependencies=[Depends(require_user)])
     def review(case_id: str, request: ReviewRequest) -> dict[str, Any]:
         case = get_case_or_404(case_id)
+        if request.decision == ReviewDecision.APPROVE:
+            detail = build_case_detail(case, runtime.repository.list_documents(case_id))
+            if detail["unresolved_fields"]:
+                raise HTTPException(409, "resolve all outstanding fields before approving this case")
         if request.decision == ReviewDecision.DECLINE and case.get("source_type") == "gmail":
             if case.get("version") != request.expected_version:
                 raise HTTPException(409, "case changed; refresh before reviewing")
             try:
-                return create_case_draft(runtime.repository, runtime.gmail, runtime.telegram, case)
+                documents = runtime.repository.list_documents(case_id)
+                detail = build_case_detail(case, documents)
+                draft_res = create_case_draft(
+                    runtime.repository,
+                    runtime.gmail,
+                    runtime.telegram,
+                    case,
+                    blobs=runtime.blobs,
+                    explainer=runtime.explainer,
+                    unresolved_fields=detail.get("unresolved_fields"),
+                    comparisons=detail.get("comparisons"),
+                    field_reviews=case.get("field_reviews"),
+                    set_decline=False,
+                )
+                invalidate_cached_cases()
+                return build_case_detail(draft_res, documents)
             except ValueError as exc:
                 raise HTTPException(409, str(exc)) from exc
+            except Exception as exc:
+                logger.exception("Failed to prepare correction draft for case %s: %s", case_id, exc)
+                raise HTTPException(500, f"Failed to prepare correction draft: {exc}") from exc
         try:
             updated = runtime.repository.update_case(
                 case_id,
@@ -255,9 +476,10 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             "reviewed",
             {"decision": request.decision.value, "note": request.note},
         )
+        invalidate_cached_cases()
         return updated
 
-    @app.post("/api/cases/{case_id}/explain", dependencies=[Depends(require_reviewer)])
+    @app.post("/api/cases/{case_id}/explain", dependencies=[Depends(require_user)])
     def explain(case_id: str, request: ExplainRequest) -> dict[str, str]:
         case = get_case_or_404(case_id)
         answer = runtime.explainer.explain(case, request.question)
@@ -266,52 +488,159 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         )
         return {"answer": answer}
 
-    @app.put("/api/cases/{case_id}/draft", dependencies=[Depends(require_reviewer)])
+    @app.put("/api/cases/{case_id}/draft", dependencies=[Depends(require_user)])
     def update_draft(case_id: str, request: DraftUpdateRequest) -> dict[str, Any]:
         case = get_case_or_404(case_id)
-        if not case.get("gmail_draft_id"):
-            raise HTTPException(409, "case has no Gmail draft")
+        correction = case.get("correction_draft") or {}
+        draft_id = correction.get("gmail_draft_id") or case.get("gmail_draft_id")
+        if not draft_id and not correction and not case.get("draft_subject"):
+            raise HTTPException(409, "case has no correction draft")
+        if case.get("version") != request.expected_version:
+            raise HTTPException(409, "draft changed; refresh before editing")
+
+        delivery_mode = correction.get("delivery_mode") or ("live" if case.get("has_live_gmail") else "compose")
+        recipient = correction.get("to") or case.get("sender", "")
+        new_hash = content_hash(request.subject, request.body)
+
+        if delivery_mode == "live":
+            if not getattr(runtime.gmail, "is_configured", False) or not draft_id:
+                raise HTTPException(400, "Cannot synchronize draft: Gmail OAuth is not configured")
+            try:
+                runtime.gmail.update_draft(
+                    draft_id,
+                    to=recipient,
+                    subject=request.subject,
+                    body=request.body,
+                    thread_id=case.get("gmail_thread_id", ""),
+                )
+            except Exception as exc:
+                logger.warning("Could not sync draft update with Gmail API: %s", exc)
+                raise HTTPException(502, f"Failed to synchronize draft with Gmail: {exc}") from exc
+            new_url = correction.get("gmail_url") or case.get("gmail_draft_url")
+        else:
+            from backend.core.draft_generator import build_compose_url
+            new_url = build_compose_url(recipient, request.subject, request.body)
+
+        updated_correction = {
+            **correction,
+            "subject": request.subject,
+            "body": request.body,
+            "content_hash": new_hash,
+            "gmail_url": new_url,
+        }
         try:
-            runtime.gmail.update_draft(
-                case["gmail_draft_id"],
-                to=case["sender"],
-                subject=request.subject,
-                body=request.body,
-                thread_id=case.get("gmail_thread_id", ""),
-            )
-            return runtime.repository.update_case(
+            updated = runtime.repository.update_case(
                 case_id,
                 {
+                    "correction_draft": updated_correction,
                     "draft_subject": request.subject,
                     "draft_body": request.body,
-                    "draft_content_hash": content_hash(request.subject, request.body),
+                    "draft_content_hash": new_hash,
+                    "gmail_draft_url": new_url,
                 },
                 expected_version=request.expected_version,
             )
+            invalidate_cached_cases()
+            documents = runtime.repository.list_documents(case_id)
+            return build_case_detail(updated, documents)
         except Conflict as exc:
             raise HTTPException(409, "draft changed; refresh before editing") from exc
 
-    @app.post("/api/cases/{case_id}/draft/send", dependencies=[Depends(require_reviewer)])
-    def send_draft(case_id: str, request: DraftSendRequest) -> dict[str, Any]:
+    @app.post("/api/cases/{case_id}/draft/send", dependencies=[Depends(require_user)])
+    def send_draft(
+        case_id: str,
+        request: DraftSendRequest,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
         case = get_case_or_404(case_id)
         if case.get("version") != request.expected_version:
             raise HTTPException(409, "draft changed; refresh before sending")
-        current = runtime.gmail.get_draft_content(case["gmail_draft_id"])
+        correction = case.get("correction_draft") or {}
+        delivery_mode = correction.get("delivery_mode") or ("live" if case.get("has_live_gmail") else "compose")
+        if delivery_mode != "live" or not getattr(runtime.gmail, "is_configured", False):
+            raise HTTPException(
+                400,
+                "Server-side sending is only available for live Gmail drafts. Use confirm-sent for compose mode.",
+            )
+        draft_id = correction.get("gmail_draft_id") or case.get("gmail_draft_id")
+        if not draft_id:
+            raise HTTPException(409, "case has no live Gmail draft")
+        current = runtime.gmail.get_draft_content(draft_id)
         current_hash = content_hash(current["subject"], current["body"])
         if current_hash != request.expected_content_hash:
             raise HTTPException(409, "Gmail draft changed; review the new content before sending")
-        sent = runtime.gmail.send_draft(case["gmail_draft_id"])
+        sent = runtime.gmail.send_draft(draft_id)
+        sent_id = sent.get("id")
+
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        updated_correction = {
+            **correction,
+            "state": "SENT",
+            "sent_at": utcnow().isoformat(),
+            "sent_by": reviewer_id,
+        }
         updated = runtime.repository.update_case(
             case_id,
-            {"draft_state": "SENT", "gmail_sent_message_id": sent.get("id")},
+            {
+                "correction_draft": updated_correction,
+                "draft_state": "SENT",
+                "gmail_sent_message_id": sent_id,
+                "review_decision": "DECLINE",
+            },
             expected_version=request.expected_version,
         )
-        runtime.repository.append_event(case_id, "gmail_draft_sent", {"message_id": sent.get("id")})
-        return updated
+        runtime.repository.append_event(
+            case_id,
+            "gmail_draft_sent",
+            {"message_id": sent_id, "reviewer": reviewer_id},
+        )
+        invalidate_cached_cases()
+        documents = runtime.repository.list_documents(case_id)
+        return build_case_detail(updated, documents)
+
+    @app.post("/api/cases/{case_id}/draft/confirm-sent", dependencies=[Depends(require_user)])
+    def confirm_sent_draft(
+        case_id: str,
+        payload: dict[str, Any] | None = None,
+        reviewer: dict[str, Any] = Depends(require_user),
+    ) -> dict[str, Any]:
+        case = get_case_or_404(case_id)
+        expected_version = (payload or {}).get("expected_version")
+        if expected_version is not None and case.get("version") != expected_version:
+            raise HTTPException(409, "case changed; refresh before confirming")
+        correction = case.get("correction_draft") or {}
+        if not correction and not case.get("draft_subject"):
+            raise HTTPException(400, "case has no correction draft to confirm")
+        sent_at = utcnow().isoformat()
+        reviewer_id = reviewer.get("email") or reviewer.get("uid") or "Reviewer"
+        updated_correction = {
+            **correction,
+            "state": "SENT",
+            "sent_at": sent_at,
+            "sent_by": reviewer_id,
+        }
+        updated = runtime.repository.update_case(
+            case_id,
+            {
+                "correction_draft": updated_correction,
+                "draft_state": "SENT",
+                "review_decision": "DECLINE",
+            },
+            expected_version=case.get("version"),
+        )
+        runtime.repository.append_event(
+            case_id,
+            "compose_draft_confirmed_sent",
+            {"reviewer": reviewer_id, "sent_at": sent_at},
+        )
+        invalidate_cached_cases()
+        documents = runtime.repository.list_documents(case_id)
+        return build_case_detail(updated, documents)
 
     def settings_view() -> dict[str, Any]:
         policy = runtime.repository.get_platform_settings()
         gmail_state = runtime.repository.get_gmail_state() or {}
+        client_configured = getattr(runtime.gmail, "is_configured", False)
         return {
             **policy,
             "low_confidence_requires_review": True,
@@ -319,37 +648,42 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             "unreadable_requires_review": True,
             "gmail": {
                 "address": gmail_state.get("email_address") or settings.gmail_address,
-                "oauth_status": gmail_state.get("oauth_status", "not_connected"),
+                "oauth_status": (
+                    gmail_state.get("oauth_status", "not_connected")
+                    if client_configured
+                    else "Gmail OAuth client not configured"
+                ),
                 "watch_expiration": gmail_state.get("watch_expiration"),
                 "history_id_present": bool(gmail_state.get("history_id")),
+                "client_configured": client_configured,
             },
         }
 
-    @app.get("/api/settings", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/settings", dependencies=[Depends(require_admin)])
     def get_platform_settings() -> dict[str, Any]:
         return settings_view()
 
-    @app.put("/api/settings", dependencies=[Depends(require_reviewer)])
+    @app.put("/api/settings", dependencies=[Depends(require_admin)])
     def update_platform_settings(request: PlatformSettingsUpdate) -> dict[str, Any]:
         runtime.repository.set_platform_settings(request.model_dump())
         return settings_view()
 
-    @app.get("/api/knowledge-base/weeks", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/knowledge-base/weeks", dependencies=[Depends(require_user)])
     def list_knowledge_base_weeks() -> list[dict[str, Any]]:
         return runtime.repository.list_knowledge_base_weeks()
 
-    @app.get("/api/knowledge-base/weeks/{iso_week}", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/knowledge-base/weeks/{iso_week}", dependencies=[Depends(require_user)])
     def get_knowledge_base_week(iso_week: str) -> dict[str, Any]:
         week = runtime.repository.get_knowledge_base_week(iso_week)
         if not week:
             raise HTTPException(404, f"Weekly knowledge base for {iso_week} not found")
         return week
 
-    @app.get("/api/knowledge-base/registry", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/knowledge-base/registry", dependencies=[Depends(require_user)])
     def list_assumptions(status: str | None = None) -> list[dict[str, Any]]:
         return runtime.repository.list_assumptions(status=status)
 
-    @app.post("/api/knowledge-base/publish", dependencies=[Depends(require_reviewer)])
+    @app.post("/api/knowledge-base/publish", dependencies=[Depends(require_user)])
     def publish_knowledge_base(week: str | None = None) -> dict[str, Any]:
         if not week:
             from datetime import UTC, datetime
@@ -360,7 +694,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
     @app.get(
         "/api/knowledge-base/preview/{filename}",
-        dependencies=[Depends(require_reviewer)],
+        dependencies=[Depends(require_user)],
     )
     def preview_knowledge_base(filename: str) -> HTMLResponse:
         clean_name = re.sub(r"[^a-zA-Z0-9_\-]", "", filename)
@@ -387,8 +721,13 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             },
         )
 
-    @app.get("/api/integrations/gmail/oauth/start", dependencies=[Depends(require_reviewer)])
+    @app.get("/api/integrations/gmail/oauth/start", dependencies=[Depends(require_admin)])
     def gmail_oauth_start() -> dict[str, str]:
+        if not getattr(runtime.gmail, "is_configured", False):
+            raise HTTPException(
+                503,
+                "Gmail OAuth client not configured. Please configure the GMAIL_OAUTH_CLIENT_JSON secret in Google Secret Manager.",
+            )
         state = sign_state(
             {"exp": int(time.time()) + 600, "nonce": secrets.token_urlsafe(16)},
             settings.app_signing_secret,
@@ -434,6 +773,21 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
 
 def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
+    try:
+        _process_telegram_update(runtime, update)
+    except Exception as exc:
+        logger.exception("Failed to process Telegram update: %s", exc)
+        message = update.get("message") or {}
+        chat_id = message.get("chat", {}).get("id")
+        if chat_id:
+            with suppress(Exception):
+                runtime.telegram.send_message(
+                    str(chat_id),
+                    "⚠️ <i>An error occurred while processing your request. Please try again.</i>",
+                )
+
+
+def _process_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
     callback = update.get("callback_query")
     if callback:
         _handle_callback(runtime, callback)
@@ -443,11 +797,173 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
         return
     chat_id = str(message["chat"]["id"])
     text = (message.get("text") or message.get("caption") or "").strip()
+    command = text.split(maxsplit=1)[0].split("@", 1)[0].lower() if text else ""
+    runtime.telegram.send_chat_action(chat_id, "typing")
     if text.startswith("/start"):
         runtime.telegram.send_message(chat_id, TELEGRAM_WELCOME_TEXT)
         return
     if text.startswith("/help"):
-        runtime.telegram.send_message(chat_id, TELEGRAM_HELP_TEXT)
+        runtime.telegram.send_message(
+            chat_id,
+            TELEGRAM_HELP_TEXT.replace("/email-limit", "/email_limit")
+            .replace("Show alert and hourly email settings", "Show alert and hourly email settings (admin)")
+            .replace("Read a published weekly summary", "Open reports on the signed-in website"),
+        )
+        return
+    lower_text = text.lower().strip()
+    if lower_text in {
+        "close notification",
+        "close notifications",
+        "turn off notification",
+        "turn off notifications",
+        "disable notification",
+        "disable notifications",
+        "mute notification",
+        "mute notifications",
+        "notifications off",
+        "notification off",
+    }:
+        configured_admin = str(runtime.settings.telegram_admin_chat_id or "")
+        private_chat = message["chat"].get("type", "private") == "private"
+        sender_id = str(message.get("from", {}).get("id", chat_id))
+        if not configured_admin or not private_chat or chat_id != configured_admin or sender_id != chat_id:
+            runtime.telegram.send_message(
+                chat_id,
+                "Operational settings are managed by an administrator. You can still use all public bot features.",
+            )
+            return
+        runtime.repository.set_platform_settings({"mismatch_alerts_enabled": False})
+        runtime.telegram.send_message(
+            chat_id, "<b>Notifications:</b> off\nMismatch alerts have been closed/turned off."
+        )
+        return
+    if lower_text in {
+        "open notification",
+        "open notifications",
+        "turn on notification",
+        "turn on notifications",
+        "enable notification",
+        "enable notifications",
+        "unmute notification",
+        "unmute notifications",
+        "notifications on",
+        "notification on",
+    }:
+        configured_admin = str(runtime.settings.telegram_admin_chat_id or "")
+        private_chat = message["chat"].get("type", "private") == "private"
+        sender_id = str(message.get("from", {}).get("id", chat_id))
+        if not configured_admin or not private_chat or chat_id != configured_admin or sender_id != chat_id:
+            runtime.telegram.send_message(
+                chat_id,
+                "Operational settings are managed by an administrator. You can still use all public bot features.",
+            )
+            return
+        runtime.repository.set_platform_settings({"mismatch_alerts_enabled": True})
+        runtime.telegram.send_message(
+            chat_id, "<b>Notifications:</b> on\nMismatch alerts have been opened/turned on."
+        )
+        return
+    if command in {"/notifications", "/email_limit", "/email-limit", "/week"}:
+        configured_admin = str(runtime.settings.telegram_admin_chat_id or "")
+        private_chat = message["chat"].get("type", "private") == "private"
+        sender_id = str(message.get("from", {}).get("id", chat_id))
+        if not configured_admin or not private_chat or chat_id != configured_admin or sender_id != chat_id:
+            if command == "/week":
+                url = runtime.settings.dashboard_base_url.rstrip("/") + "/knowledge-base"
+                runtime.telegram.send_message(
+                    chat_id,
+                    "Weekly reports are available to everyone after signing into the website.",
+                    reply_markup={"inline_keyboard": [[{"text": "SIGN IN TO READ REPORTS", "url": url}]]},
+                )
+            else:
+                runtime.telegram.send_message(chat_id, "Operational settings are managed by an administrator. You can still use all public bot features.")
+            return
+    if command == "/notifications":
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2:
+            if parts[1].lower() not in {"on", "off"}:
+                runtime.telegram.send_message(chat_id, "Usage: <code>/notifications [on|off]</code>")
+                return
+            runtime.repository.set_platform_settings(
+                {"mismatch_alerts_enabled": parts[1].strip().lower() == "on"}
+            )
+        settings = runtime.repository.get_platform_settings()
+        enabled = "on" if settings.get("mismatch_alerts_enabled", True) else "off"
+        limit = int(settings.get("gmail_reconcile_limit", runtime.settings.gmail_reconcile_limit))
+        runtime.telegram.send_message(
+            chat_id,
+            f"<b>Notifications:</b> {enabled}\n"
+            f"Hourly email limit: <b>{limit}</b>\n"
+            f"Hourly reconciliation: <code>{html.escape(runtime.settings.gmail_reconcile_schedule)}</code>",
+        )
+        return
+    if command in {"/email_limit", "/email-limit"}:
+        parts = text.split(maxsplit=1)
+        try:
+            limit = int(parts[1]) if len(parts) == 2 else 0
+        except ValueError:
+            limit = 0
+        if not 1 <= limit <= 500:
+            runtime.telegram.send_message(chat_id, "Usage: <code>/email_limit 1..500</code>")
+            return
+        runtime.repository.set_platform_settings({"gmail_reconcile_limit": limit})
+        runtime.telegram.send_message(chat_id, f"Hourly email limit: <b>{limit}</b>.")
+        return
+    if command == "/week":
+        progress = runtime.telegram.send_message(chat_id, "⏳ <i>Fetching weekly operations summary...</i>")
+        parts = text.split(maxsplit=1)
+        week = parts[1].strip() if len(parts) == 2 else ""
+        if not week:
+            records = runtime.repository.list_knowledge_base_weeks()
+            if not records:
+                runtime.telegram.edit_message_text(
+                    chat_id, progress.get("message_id", 0), "No weekly summaries have been published yet."
+                )
+                return
+            record = records[0]
+            week = str(record.get("week") or "")
+        else:
+            try:
+                if not re.fullmatch(r"\d{4}-W\d{2}", week):
+                    raise ValueError("invalid ISO week")
+                date.fromisocalendar(int(week[:4]), int(week[-2:]), 1)
+            except ValueError:
+                runtime.telegram.edit_message_text(
+                    chat_id, progress.get("message_id", 0), "Usage: <code>/week YYYY-W##</code> (e.g. <code>/week 2026-W38</code>)"
+                )
+                return
+            record = runtime.repository.get_knowledge_base_week(week)
+            if not record:
+                runtime.telegram.edit_message_text(
+                    chat_id, progress.get("message_id", 0), f"Summary for <code>{html.escape(week)}</code> not found."
+                )
+                return
+        report_url = runtime.settings.dashboard_base_url.rstrip("/") + "/knowledge-base"
+        markup = {"inline_keyboard": [[{"text": "OPEN WEEKLY SUMMARY", "url": report_url}]]}
+        runtime.telegram.edit_message_text(
+            chat_id,
+            progress.get("message_id", 0),
+            f"<b>Weekly summary {html.escape(week)}</b>\n\n"
+            f"{html.escape(record.get('summary_narrative') or 'No narrative is available.')}\n"
+            f"Cases analyzed: <b>{record.get('cases_analyzed', 0)}</b>",
+            reply_markup=markup,
+        )
+        return
+    if text.startswith("/ask"):
+        parts = text.split(maxsplit=2)
+        if len(parts) != 3:
+            runtime.telegram.send_message(chat_id, "Usage: <code>/ask CASE_ID question</code>")
+            return
+        case = runtime.repository.get_case(parts[1].lower())
+        if not case or str(case.get("owner_chat_id") or chat_id) != chat_id:
+            runtime.telegram.send_message(chat_id, "That case is not available in this chat.")
+            return
+        progress = runtime.telegram.send_message(chat_id, "⏳ <i>Analyzing case with Gemini AI...</i>")
+        answer = runtime.explainer.explain(case, parts[2])
+        try:
+            runtime.telegram.edit_message_text(chat_id, progress.get("message_id", 0), answer)
+        except Exception:
+            runtime.telegram.send_message(chat_id, answer)
         return
     if text.startswith("/newcase"):
         token = secrets.token_urlsafe(6).replace("-", "").replace("_", "")
@@ -463,11 +979,12 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
         if len(parts) != 2:
             runtime.telegram.send_message(chat_id, "Usage: <code>/submit TOKEN</code>")
             return
+        progress = runtime.telegram.send_message(chat_id, "⏳ <i>Verifying token & queuing AI analysis...</i>")
         source_message_id = f"{chat_id}:{parts[1].strip()}"
         case_id = stable_case_id("telegram", source_message_id)
         case = runtime.repository.get_case(case_id)
         if not case or str(case.get("owner_chat_id")) != chat_id:
-            runtime.telegram.send_message(chat_id, "Case token not found for this chat.")
+            runtime.telegram.edit_message_text(chat_id, progress.get("message_id", 0), "Case token not found for this chat.")
             return
         message_id = runtime.publisher.publish({"case_id": case_id})
         runtime.repository.update_case(
@@ -478,7 +995,7 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
                 "task_message_id": message_id,
             },
         )
-        runtime.telegram.send_message(chat_id, f"Queued case <code>{case_id}</code>.")
+        runtime.telegram.edit_message_text(chat_id, progress.get("message_id", 0), f"Queued case <code>{case_id}</code>.")
         return
     document = message.get("document")
     if document:
@@ -520,10 +1037,15 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
         if not case or str(case.get("owner_chat_id")) != chat_id:
             runtime.telegram.send_message(chat_id, "That case is not available in this chat.")
             return
+        progress = runtime.telegram.send_message(chat_id, "⏳ <i>Retrieving case evidence & analyzing...</i>")
         answer = runtime.explainer.explain(case, text)
-        runtime.telegram.send_message(chat_id, answer)
+        try:
+            runtime.telegram.edit_message_text(chat_id, progress.get("message_id", 0), answer)
+        except Exception:
+            runtime.telegram.send_message(chat_id, answer)
         return
     if text:
+        progress = runtime.telegram.send_message(chat_id, "💭 <i>Thinking... Fetching answer...</i>")
         try:
             answer = runtime.explainer.assist(text)
         except Exception:
@@ -534,7 +1056,10 @@ def _handle_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
                 "• Upload documents with caption <code>#TOKEN</code>, then send <code>/submit TOKEN</code>.\n"
                 "• Or ask a question about an existing case by mentioning its ID (e.g. <code>case-18e47...</code>)."
             )
-        runtime.telegram.send_message(chat_id, answer)
+        try:
+            runtime.telegram.edit_message_text(chat_id, progress.get("message_id", 0), answer)
+        except Exception:
+            runtime.telegram.send_message(chat_id, answer)
 
 
 def _handle_callback(runtime: Runtime, callback: dict[str, Any]) -> None:
@@ -545,8 +1070,18 @@ def _handle_callback(runtime: Runtime, callback: dict[str, Any]) -> None:
     except ValueError:
         runtime.telegram.answer_callback(callback_id, "Invalid action")
         return
+    expected_actions = {
+        "approve": "approve",
+        "decline": "decline",
+        "send": "send_draft",
+        "confirm_sent": "confirm_sent",
+    }
+    expected_action_type = expected_actions.get(action_name)
+    if not expected_action_type:
+        runtime.telegram.answer_callback(callback_id, "Invalid action")
+        return
     action = runtime.repository.consume_action(action_id, chat_id)
-    if not action or action.get("action") != action_name.replace("send", "send_draft"):
+    if not action or action.get("action") != expected_action_type:
         runtime.telegram.answer_callback(callback_id, "Action expired or already used")
         return
     case = runtime.repository.get_case(action["case_id"])
@@ -555,27 +1090,119 @@ def _handle_callback(runtime: Runtime, callback: dict[str, Any]) -> None:
         return
     try:
         if action_name == "approve":
+            documents = runtime.repository.list_documents(case["case_id"])
+            detail = build_case_detail(case, documents)
+            if detail.get("unresolved_fields"):
+                unresolved_names = ", ".join(detail["unresolved_fields"])
+                runtime.telegram.answer_callback(
+                    callback_id,
+                    f"Cannot approve: resolve fields first ({unresolved_names})",
+                )
+                return
             runtime.repository.update_case(
                 case["case_id"],
                 {"review_decision": "APPROVE"},
                 expected_version=action["expected_version"],
             )
+            runtime.repository.append_event(
+                case["case_id"],
+                "reviewed",
+                {"decision": "APPROVE", "reviewer": f"telegram:{chat_id}"},
+            )
+            _invalidate_cached_cases(runtime)
             runtime.telegram.answer_callback(callback_id, "Case approved")
         elif action_name == "decline":
-            create_case_draft(runtime.repository, runtime.gmail, runtime.telegram, case, chat_id)
+            documents = runtime.repository.list_documents(case["case_id"])
+            detail = build_case_detail(case, documents)
+            create_case_draft(
+                runtime.repository,
+                runtime.gmail,
+                runtime.telegram,
+                case,
+                chat_id,
+                blobs=runtime.blobs,
+                explainer=runtime.explainer,
+                unresolved_fields=detail.get("unresolved_fields"),
+                comparisons=detail.get("comparisons"),
+                field_reviews=case.get("field_reviews"),
+                set_decline=False,
+            )
+            _invalidate_cached_cases(runtime)
             runtime.telegram.answer_callback(callback_id, "Draft created")
         elif action_name == "send":
-            current = runtime.gmail.get_draft_content(case["gmail_draft_id"])
+            draft_id = case.get("gmail_draft_id", "")
+            correction = case.get("correction_draft") or {}
+            delivery_mode = correction.get("delivery_mode") or (
+                "live" if case.get("has_live_gmail") else "compose"
+            )
+            if (
+                delivery_mode != "live"
+                or not getattr(runtime.gmail, "is_configured", False)
+                or not draft_id
+            ):
+                runtime.telegram.answer_callback(
+                    callback_id,
+                    "Live Gmail not configured; use compose window and confirm sent",
+                )
+                return
+            current = runtime.gmail.get_draft_content(draft_id)
             if content_hash(current["subject"], current["body"]) != action["expected_content_hash"]:
                 runtime.telegram.answer_callback(callback_id, "Draft changed; review it again")
                 return
-            sent = runtime.gmail.send_draft(case["gmail_draft_id"])
+            sent = runtime.gmail.send_draft(draft_id)
+            sent_id = sent.get("id")
+            sent_at = utcnow().isoformat()
+            updated_correction = {
+                **(case.get("correction_draft") or {}),
+                "state": "SENT",
+                "sent_at": sent_at,
+                "sent_by": f"telegram:{chat_id}",
+            }
             runtime.repository.update_case(
                 case["case_id"],
-                {"draft_state": "SENT", "gmail_sent_message_id": sent.get("id")},
+                {
+                    "correction_draft": updated_correction,
+                    "draft_state": "SENT",
+                    "gmail_sent_message_id": sent_id,
+                    "review_decision": "DECLINE",
+                },
                 expected_version=action["expected_version"],
             )
+            runtime.repository.append_event(
+                case["case_id"],
+                "gmail_draft_sent",
+                {"message_id": sent_id, "reviewer": f"telegram:{chat_id}"},
+            )
+            _invalidate_cached_cases(runtime)
             runtime.telegram.answer_callback(callback_id, "Draft sent")
+        elif action_name == "confirm_sent":
+            correction = case.get("correction_draft") or {}
+            if not correction and not case.get("draft_subject"):
+                runtime.telegram.answer_callback(callback_id, "No draft to confirm")
+                return
+            sent_at = utcnow().isoformat()
+            updated_correction = {
+                **correction,
+                "state": "SENT",
+                "sent_at": sent_at,
+                "sent_by": f"telegram:{chat_id}",
+            }
+            runtime.repository.update_case(
+                case["case_id"],
+                {
+                    "correction_draft": updated_correction,
+                    "draft_state": "SENT",
+                    "review_decision": "DECLINE",
+                },
+                expected_version=action["expected_version"],
+            )
+            runtime.repository.append_event(
+                case["case_id"],
+                "compose_draft_confirmed_sent",
+                {"reviewer": f"telegram:{chat_id}", "sent_at": sent_at},
+            )
+            _invalidate_cached_cases(runtime)
+            runtime.telegram.answer_callback(callback_id, "Sent confirmed")
     except (Conflict, ValueError, RuntimeError):
         runtime.telegram.answer_callback(callback_id, "Case changed; refresh and try again")
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 from fastapi.testclient import TestClient
 
 from backend.api.main import create_app as create_api_app
@@ -7,6 +9,31 @@ from backend.api.markdown_preview import render_preview_document
 from backend.core.runtime import Runtime
 from backend.core.schemas import ResultStatus
 from backend.worker.main import create_app as create_worker_app
+
+
+def test_google_docs_public_link_is_readable(runtime: Runtime) -> None:
+    runtime.settings.app_env = "production"
+    docs_service = MagicMock()
+    docs_service.documents.return_value.create.return_value.execute.return_value = {
+        "documentId": "doc-123"
+    }
+    drive_service = MagicMock()
+
+    with patch("google.auth.default", return_value=(object(), "test-project")), patch(
+        "googleapiclient.discovery.build", side_effect=[docs_service, drive_service]
+    ):
+        doc_id, drive_url, _ = runtime.knowledge_publisher.publish_to_drive_or_local(
+            "Weekly Knowledge Base", "# Summary", "ClassAll_Assumptions_2026-W38"
+        )
+
+    assert doc_id == "doc-123"
+    assert drive_url == "https://docs.google.com/document/d/doc-123/edit"
+    drive_service.permissions.return_value.create.assert_called_once_with(
+        fileId="doc-123",
+        body={"type": "anyone", "role": "reader"},
+        sendNotificationEmail=False,
+        fields="id",
+    )
 
 
 def test_knowledge_publisher_aggregates_and_publishes(runtime: Runtime) -> None:

@@ -35,8 +35,8 @@ export interface VerificationCase {
   sourceEmailSender: string;
   sourceEmailReceived: string;
   documents: {
-    si: { name: string; pages: number } | null;
-    bl: { name: string; pages: number; scanned?: boolean } | null;
+    si: { name: string; pages: number; documentId?: string; caseId?: string; contentType?: string; rawText?: string | null } | null;
+    bl: { name: string; pages: number; scanned?: boolean; documentId?: string; caseId?: string; contentType?: string; rawText?: string | null } | null;
   };
   fieldsChecked: number | null;
   result: VerificationStatus;

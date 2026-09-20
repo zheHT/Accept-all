@@ -73,10 +73,7 @@ def test_sniffer_format_mismatches():
     # A) File named invoice.pdf that is actually plain text
     fake_pdf_text = b"Invoice #INV-2026-9901. Shipper: Evergreen Marine. Port: Kaohsiung"
     pdf_mismatch_preview = inspect_attachment("invoice.pdf", fake_pdf_text)
-    assert pdf_mismatch_preview in [
-        "[Unreadable or Corrupted File]",
-        "[Scanned or Image-only PDF]",
-    ]
+    assert pdf_mismatch_preview == "[Unreadable or Corrupted File]"
 
     # B) File named manifest.xlsx that has corrupted/invalid XML or zip structure
     corrupted_xlsx_bytes = b"PK\x03\x04INVALID_ZIP_NOT_AN_EXCEL_PACKAGE"
@@ -267,7 +264,7 @@ def test_rate_limit_simulation_429(client, mock_gemini):
 # 7. Zero-Byte or Empty Attachments
 # --------------------------------------------------------------------------
 def test_zero_byte_empty_attachments(mock_gemini):
-    """Verify zero-byte or empty file content sets missing_attachments_flag == True."""
+    """Verify fewer than two attachment previews set missing_attachments_flag == True."""
     # 1. Zero-byte content into inspect_attachment
     zero_bytes_preview = inspect_attachment("empty_bl.pdf", b"")
     assert zero_bytes_preview == "[Unreadable or Corrupted File]"
@@ -275,7 +272,7 @@ def test_zero_byte_empty_attachments(mock_gemini):
     empty_str_preview = inspect_attachment("empty_si.txt", "")
     assert empty_str_preview == "" or empty_str_preview == "[Unreadable or Corrupted File]"
 
-    # 2. When attachments contain only unreadable/corrupted files, guardrail flags it
+    # 2. Two supplied previews count as present even when their content is unreadable.
     missing_flag = _check_missing_attachments(
         category=EmailCategory.DOCUMENT_COMPARISON,
         attachment_previews={
@@ -283,7 +280,7 @@ def test_zero_byte_empty_attachments(mock_gemini):
             "empty_si.txt": "",
         },
     )
-    assert missing_flag is True
+    assert missing_flag is False
 
     # 3. Test through classify_email
     mock_resp = MagicMock()

@@ -1,5 +1,5 @@
 import json
-from typing import Protocol
+from typing import Any, Protocol
 
 from google.cloud import pubsub_v1
 
@@ -18,8 +18,11 @@ class MemoryPublisher:
 
 
 class PubSubTaskPublisher:
-    def __init__(self, project: str, topic: str) -> None:
-        self.client = pubsub_v1.PublisherClient()
+    def __init__(self, project: str, topic: str, credentials: Any = None) -> None:
+        if credentials is not None:
+            self.client = pubsub_v1.PublisherClient(credentials=credentials)
+        else:
+            self.client = pubsub_v1.PublisherClient()
         self.topic_path = self.client.topic_path(project, topic)
 
     def publish(self, payload: dict) -> str:

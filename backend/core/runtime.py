@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from google.cloud import secretmanager
 
-from backend.core.blob_store import BlobStore, GCSBlobStore, LocalBlobStore
+from backend.core.blob_store import BlobStore, GCSBlobStore, HybridBlobStore, LocalBlobStore
 from backend.core.config import Settings
+from backend.core.credentials import get_google_credentials
 from backend.core.explainer import CaseExplainer
 from backend.core.gmail import GmailClient
 from backend.core.inference import ModelRouter
@@ -15,6 +17,8 @@ from backend.core.knowledge_publisher import KnowledgePublisher
 from backend.core.publisher import MemoryPublisher, PubSubTaskPublisher, TaskPublisher
 from backend.core.repository import CaseRepository, FirestoreRepository, InMemoryRepository
 from backend.core.telegram import TelegramClient, TelegramReviewNotifier
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -34,25 +38,78 @@ class Runtime:
 
 def build_runtime(settings: Settings, *, local_root: Path | None = None) -> Runtime:
     refresh_token_provider = None
-    if settings.app_env.lower() in {"local", "test"}:
+    if settings.app_env.lower() == "test":
         repository: CaseRepository = InMemoryRepository()
         blobs: BlobStore = LocalBlobStore(local_root or Path(".local-blobs"))
         publisher: TaskPublisher = MemoryPublisher()
     else:
-        repository = FirestoreRepository(settings.google_cloud_project, settings.firestore_database)
-        blobs = GCSBlobStore(settings.google_cloud_project, settings.gcs_bucket)
-        publisher = PubSubTaskPublisher(settings.google_cloud_project, settings.doc_tasks_topic)
-        secret_client = secretmanager.SecretManagerServiceClient()
+        credentials = get_google_credentials()
+        repository = FirestoreRepository(
+            settings.google_cloud_project,
+            settings.firestore_database,
+            credentials=credentials,
+        )
+        local_blobs = LocalBlobStore(local_root or Path(".local-blobs"))
+        gcs_blobs = GCSBlobStore(
+            settings.google_cloud_project,
+            settings.gcs_bucket,
+            credentials=credentials,
+        )
+        blobs = (
+            HybridBlobStore(gcs=gcs_blobs, local=local_blobs)
+            if settings.app_env.lower() == "local"
+            else gcs_blobs
+        )
 
-        def latest_gmail_refresh_token() -> str:
-            name = (
-                f"projects/{settings.google_cloud_project}/secrets/"
-                "gmail-oauth-refresh-token/versions/latest"
+        if settings.app_env.lower() == "local":
+            try:
+                publisher = PubSubTaskPublisher(
+                    settings.google_cloud_project,
+                    settings.doc_tasks_topic,
+                    credentials=credentials,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to initialize PubSubTaskPublisher locally: %s. Using MemoryPublisher.",
+                    exc,
+                )
+                publisher = MemoryPublisher()
+        else:
+            publisher = PubSubTaskPublisher(
+                settings.google_cloud_project,
+                settings.doc_tasks_topic,
+                credentials=credentials,
             )
-            response = secret_client.access_secret_version(request={"name": name})
-            return response.payload.data.decode()
 
-        refresh_token_provider = latest_gmail_refresh_token
+        if settings.app_env.lower() != "local":
+            secret_client = secretmanager.SecretManagerServiceClient()
+
+            def latest_gmail_refresh_token() -> str:
+                name = (
+                    f"projects/{settings.google_cloud_project}/secrets/"
+                    "gmail-oauth-refresh-token/versions/latest"
+                )
+                response = secret_client.access_secret_version(request={"name": name})
+                return response.payload.data.decode()
+
+            refresh_token_provider = latest_gmail_refresh_token
+        elif settings.gmail_oauth_refresh_token:
+            refresh_token_provider = lambda: settings.gmail_oauth_refresh_token
+        else:
+            try:
+                secret_client = secretmanager.SecretManagerServiceClient(credentials=credentials)
+
+                def latest_gmail_refresh_token() -> str:
+                    name = (
+                        f"projects/{settings.google_cloud_project}/secrets/"
+                        "gmail-oauth-refresh-token/versions/latest"
+                    )
+                    response = secret_client.access_secret_version(request={"name": name})
+                    return response.payload.data.decode()
+
+                refresh_token_provider = latest_gmail_refresh_token
+            except Exception:
+                pass
     telegram = TelegramClient(settings.telegram_bot_token)
     notifier = TelegramReviewNotifier(
         telegram,

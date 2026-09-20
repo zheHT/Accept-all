@@ -43,6 +43,9 @@ export const VERIFICATION_THRESHOLD = 0.85;
 
 export interface DocumentEvidence {
   name: string;
+  documentId?: string;
+  caseId?: string;
+  contentType?: string;
   pages: number;
   scanned?: boolean;
   snippet: string[];
@@ -56,10 +59,42 @@ export interface DocumentEvidence {
 
 export interface ReviewDecision {
   type: "confirm" | "correct" | "unreadable";
+  /** API field key (for example `gross_weight`) when reviewing one comparison. */
+  field?: string;
+  documentRole?: "SI" | "BL";
   value: string | null;
   notes: string;
   reviewer: string;
   at: string;
+}
+
+export interface StructuredFieldReview {
+  field: string;
+  label?: string;
+  decision: "confirm" | "correct" | "unreadable";
+  value: string | null;
+  documentRole: "SI" | "BL";
+  note: string;
+  reviewer: string;
+  reviewerId?: string | null;
+  at: string;
+  originalSi?: string | null;
+  originalBl?: string | null;
+  resolved: boolean;
+}
+
+export type DiscrepancyType = "mismatch" | "missing" | "uncertain" | "match";
+
+export interface FieldDiscrepancyItem {
+  field: string;
+  label: string;
+  si: string | null;
+  bl: string | null;
+  matches: boolean;
+  lowConfidence: boolean;
+  discrepancyType: DiscrepancyType;
+  resolved?: boolean;
+  humanReview?: StructuredFieldReview | null;
 }
 
 /** Visual model used by the restored main-branch review queue and detail view. */
@@ -78,4 +113,9 @@ export interface ReviewCase {
   si: DocumentEvidence;
   bl: DocumentEvidence;
   decision?: ReviewDecision;
+  /** All seven comparison keys remain visible and navigable while the reviewer works through a case. */
+  comparisonFields?: FieldDiscrepancyItem[];
+  fieldReviews?: Record<string, StructuredFieldReview>;
+  reviewHistory?: StructuredFieldReview[];
+  unresolvedFields?: string[];
 }

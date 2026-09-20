@@ -28,6 +28,20 @@ class FakeTelegram:
     def answer_callback(self, callback_query_id, text):
         self.callbacks.append((callback_query_id, text))
 
+    def send_chat_action(self, chat_id, action="typing"):
+        return {"ok": True}
+
+    def edit_message_text(self, chat_id, message_id, text, *, reply_markup=None):
+        idx = int(message_id) - 1
+        if 0 <= idx < len(self.messages):
+            self.messages[idx] = (str(chat_id), text, reply_markup)
+            return {"message_id": message_id}
+        self.messages.append((str(chat_id), text, reply_markup))
+        return {"message_id": len(self.messages)}
+
+    def delete_message(self, chat_id, message_id):
+        return True
+
     def get_file(self, file_id):
         return b"document", f"documents/{file_id}.txt"
 
@@ -52,10 +66,25 @@ class FakeGmail(GmailClient):
     def get_attachment(self, message_id: str, attachment_id: str) -> bytes:
         return b"fake attachment data"
 
-    def create_reply_draft(self, *, to, subject, body, thread_id, message_id_header=""):
+    def create_reply_draft(
+        self,
+        *,
+        to,
+        subject,
+        body,
+        thread_id,
+        message_id_header="",
+        attachments=None,
+    ):
         del message_id_header
         draft_id = f"draft-{len(self.drafts) + 1}"
-        self.drafts[draft_id] = {"to": to, "subject": subject, "body": body, "thread_id": thread_id}
+        self.drafts[draft_id] = {
+            "to": to,
+            "subject": subject,
+            "body": body,
+            "thread_id": thread_id,
+            "attachments": attachments or [],
+        }
         return {"id": draft_id}
 
     def update_draft(self, draft_id, *, to, subject, body, thread_id):
