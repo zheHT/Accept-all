@@ -1,24 +1,99 @@
-# ClassAll Platform
+# ShipVerify Platform
 
 > **A production-oriented hackathon prototype with enterprise safety patterns.**
 
-ClassAll is an intelligent maritime shipping correspondence triage and document reconciliation platform. It ingests high-volume customer emails, classifies correspondence into operational categories, extracts and cross-checks shipping instructions against draft bills of lading across a strict 7-field verified contract, and orchestrates human-in-the-loop review with automated Gmail draft replies.
+ShipVerify is an intelligent maritime shipping correspondence triage and document reconciliation platform. It ingests high-volume customer emails, classifies correspondence into operational categories, extracts and cross-checks shipping instructions against draft bills of lading across a strict 7-field verified contract, and orchestrates human-in-the-loop review with automated Gmail draft replies.
 
 ---
 
 ## System Architecture
 
 ```text
-Gmail (Push Notifications) ──┐
-                             ├→ Pub/Sub ─→ Private Cloud Run Worker ──┐
-Telegram (Secure Webhook) ───┘                                        │
-                                                                      ├→ Ingestor ─→ GCS (Blobs) + Firestore (State)
-Reviewer ─→ Firebase Auth ─→ Cloud Run API ─→ Cases / Reviews / Drafts│                                            │
-                                  ↓                                   └──────────────────── Processor ◄────────────┘
-                    Next.js Static Dashboard (Firebase Hosting)                                 │
-                                                                                    Gemini LLM Discrepancy Engine
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    CHANNELS & INGESTION                                     │
+│                                                                                             │
+│  Gmail Push / Cron ──→ Pub/Sub (gmail-events) ──→ Cloud Run Worker (gmail_ingest) ──┐       │
+│                                                                                     │       │
+│  Telegram Bot Webhook ──→ Cloud Run API (/api/telegram-webhook) ────────────────────┼─────┐ │
+│                                                                                     │     │ │
+│  Grader / Automated Ingestion ──→ Cloud Run API (/api/ingest) ──────────────────────┤     │ │
+│                                                                                     │     │ │
+│                                                                  ┌──────────────────┴───┐ │ │
+│                                                                  │    Case Ingestor     │ │ │
+│                                                                  └──────────┬───────────┘ │ │
+└─────────────────────────────────────────────────────────────────────────────┼─────────────┼─┘
+                                                                              │             │
+                                              ┌───────────────────────────────┴─────────┐   │
+                                              ▼                                         ▼   │
+                                    ┌──────────────────┐                     ┌────────────────────┐
+                                    │  GCS (Raw Blobs) │                     │ Firestore (State)  │
+                                    │  - SI / BL PDFs  │                     │ - Cases & Reviews  │
+                                    │  - Knowledge Docs│                     │ - Assumption Reg.  │
+                                    └──────────────────┘                     └──────────┬─────────┘
+                                                                                        ▲
+                              ┌─────────────────────────────────────────────────────────┼───────┐
+                              │                                                         │       │
+                              ▼                                                         │       ▼
+                   Pub/Sub (doc-tasks)                                                  │   Interactive Q&A /
+                              │                                                         │   CaseExplainer
+                              ▼                                                         │   (Gemini 3.5 Flash)
+                ┌───────────────────────────┐                                           │       ▲
+                │  Cloud Run Worker         │                                           │       │
+                │  - Case Processor         │─── ModelRouter (Primary: Gemini 3.5 Flash)│       │
+                │  - Distributed Leases     │                (Fallback: Gemini 2.5 Flash)       │
+                └─────────────┬─────────────┘                                           │       │
+                              │                                                         │       │
+               ┌──────────────┴────────────────┐                                        │       │
+               ▼                               ▼                                        │       │
+        Gmail API                     Telegram Bot                                      │       │
+        (Draft Replies)               (Operator Alerts)                                 │       │
+                                                                                        │       │
+┌───────────────────────────────────────────────────────────────────────────────────────┼───────┼──┐
+│                                      HUMAN REVIEW & OPERATIONS                        │       │  │
+│                                                                                       │       │  │
+│  Reviewer ──→ Next.js Dashboard (Firebase Hosting) ──→ Firebase Auth ──→ Cloud Run API ┴───────┘  │
+│               - Cases & Review Queue                                      - REST APIs (/api/*)   │
+│               - Split-pane SI vs BL Document Review                       - Structured Decisions │
+│               - Weekly Knowledge Base & Assumptions                       - Report Previews      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
-[Evaluation CLI & Benchmarks] ─→ backend/evaluation_adapter (Isolated test harness; never deployed)
+[Isolated Evaluation Harness] ──→ backend/evaluation_adapter (Local benchmarks; never deployed)
+```
+
+```mermaid
+flowchart TD
+    subgraph Channels["Ingestion & Channels"]
+        GM[Gmail Push & Cron] -->|Pub/Sub: gmail-events| W_GM[Worker: gmail_ingest]
+        TG[Telegram Webhook] -->|Direct HTTPS| API_TG[API: telegram_webhook]
+        GR[Evaluation / Ingest API] -->|Direct HTTPS| API_IN[API: /api/ingest]
+        
+        W_GM --> Ingestor[Case Ingestor]
+        API_TG --> Ingestor
+        API_IN --> Ingestor
+    end
+
+    Ingestor -->|Store PDFs & Attachments| GCS[(Google Cloud Storage)]
+    Ingestor -->|Persist Case & Ingest State| FS[(Firestore DB)]
+    Ingestor -->|Enqueue Processing| PS_TASK[Pub/Sub: doc-tasks]
+
+    subgraph Processing["Processing & Inference"]
+        PS_TASK -->|Push Subscription| Worker[Cloud Run Worker]
+        Worker -->|Acquire Distributed Lease| FS
+        Worker -->|Fetch Document Blobs| GCS
+        Worker -->|Extract & Reconcile 7 Fields| MR[ModelRouter<br/>Primary: Gemini 3.5 Flash<br/>Fallback: Gemini 2.5 Flash]
+        Worker -->|Update Status & Assumptions| FS
+        Worker -->|Create Discrepancy Draft| GmailAPI[Gmail API Drafts]
+        Worker -->|Broadcast Mismatch Alerts| TGBot[Telegram Alerts]
+    end
+
+    subgraph Review["Reviewer Dashboard & Operations"]
+        User[Human Reviewer] -->|HTTPS| Web[Next.js Dashboard<br/>Firebase Hosting]
+        Web -->|Google Sign-In| FAuth[Firebase Auth]
+        Web -->|Bearer ID Token| API[Cloud Run API]
+        API -->|Read & Update Cases| FS
+        API -->|Stream Document Previews| GCS
+        API -->|Case Explanations & Bot Q&A| Explainer[CaseExplainer<br/>Gemini 3.5 Flash]
+    end
 ```
 
 ### Core Architecture Components
@@ -99,10 +174,9 @@ Stored in Firestore at `platform_settings/current`:
   - `missing_value_requires_review`: Fixed `true` — any missing required contract field triggers human verification.
   - `unreadable_requires_review`: Fixed `true` — corrupted, password-protected, or unparseable attachments automatically route to review.
 
-### Hardened Knowledge Base & Previews
+### Knowledge Base
 - Weekly knowledge bases aggregate operational exceptions and patterns by ISO week (e.g., `2026-W38`).
-- Generated Markdown documents are stored securely in Google Cloud Storage blobs.
-- Previews are rendered on-demand through an authenticated endpoint (`/api/knowledge-base/preview/{filename}`) with HTML escaping (`html.escape()`) and a strict Content Security Policy (`default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none';`).
+- Weekly summaries and governed assumptions are stored in the application knowledge base and surfaced in the authenticated dashboard.
 
 ### Document Comparison & Field Review
 
@@ -127,7 +201,7 @@ For acceptance testing, compare two multi-page PDFs, switch only one pane to tex
 - **Firebase CLI**: `firebase-tools` for hosting deployments
 
 ### Secret Management
-ClassAll separates mandatory core secrets from optional integration secrets:
+ShipVerify separates mandatory core secrets from optional integration secrets:
 
 #### Mandatory Core Secrets (GCP Secret Manager)
 - `grader-ingest-key`: Pre-shared secret key for automated ingestion endpoints.
@@ -225,7 +299,7 @@ docker stop test-api
 ## Deployment & Rollback Strategy
 
 ### Cloud Run & Firebase Deployment
-Automated end-to-end deployment is orchestrated by [`infra/deploy.sh`](file:///d:/agentic_ai_project/classall-platform/infra/deploy.sh):
+Automated end-to-end deployment is orchestrated by [`infra/deploy.sh`](infra/deploy.sh):
 ```bash
 bash infra/deploy.sh
 ```
@@ -279,7 +353,7 @@ Step 5: Safe Gmail Reply ◄── Step 4: Discrepancy Verification ◄───
 
 ## Evaluation Benchmark & Scoring
 
-For evaluating the platform against the SDOC Hackathon reference dataset and scoring server, please refer to the dedicated [Evaluation Guide](file:///d:/agentic_ai_project/classall-platform/docs/EVALUATION_GUIDE.md).
+For evaluating the platform against the SDOC Hackathon reference dataset and scoring server, please refer to the dedicated [Evaluation Guide](docs/EVALUATION_GUIDE.md).
 
 > [!NOTE]
-> The evaluation runner ([`scripts/eval_inbox.py`](file:///d:/agentic_ai_project/classall-platform/scripts/eval_inbox.py)) relies solely on the isolated [`backend/evaluation_adapter`](file:///d:/agentic_ai_project/classall-platform/backend/evaluation_adapter) package and does not interact with or deploy to the production Cloud Run architecture.
+> The evaluation runner ([`scripts/eval_inbox.py`](scripts/eval_inbox.py)) relies solely on the isolated [`backend/evaluation_adapter`](backend/evaluation_adapter) package and does not interact with or deploy to the production Cloud Run architecture.

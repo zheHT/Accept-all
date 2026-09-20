@@ -17,7 +17,7 @@ export function ErrorState({ message, retry }: { message: string; retry: () => v
 }
 
 export function StaleNotice() {
-  return <p className="rounded-lg bg-review-50 px-3 py-2 text-[12px] text-review-700 ring-1 ring-inset ring-review-200">Showing the last successful response while ClassAll reconnects.</p>;
+  return <p className="rounded-lg bg-review-50 px-3 py-2 text-[12px] text-review-700 ring-1 ring-inset ring-review-200">Showing the last successful response while ShipVerify reconnects.</p>;
 }
 
 export function EmptyState({ title, detail }: { title: string; detail: string }) {

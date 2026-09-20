@@ -123,6 +123,15 @@ export function InboxView() {
     window.history.replaceState(null, "", window.location.pathname);
   }, []);
 
+  const handleEmailUpdated = useCallback(
+    (updated: InboxEmail) => {
+      setSelected(updated);
+      setEmails((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      void inbox.refresh();
+    },
+    [inbox],
+  );
+
   const sync = useCallback(async () => {
     await inbox.refresh();
     setLastSync(clock(new Date()));
@@ -453,7 +462,7 @@ export function InboxView() {
         )}
       </section>
 
-      <EmailDrawer email={selected} onClose={closeEmail} />
+      <EmailDrawer email={selected} onClose={closeEmail} onEmailUpdated={handleEmailUpdated} />
     </>
   );
 }

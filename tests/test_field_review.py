@@ -142,6 +142,28 @@ def test_pdf_content_is_authenticated_scoped_and_not_cached(runtime, review_clie
     assert save_field(review_client).status_code == 401
 
 
+def test_missing_original_does_not_masquerade_as_downloadable_source(runtime, review_client):
+    runtime.repository.add_document("case-review", "missing-original", {
+        "filename": "missing-original.pdf",
+        "content_type": "application/pdf",
+        "gcs_uri": (runtime.blobs.root / "missing-original.pdf").as_uri(),
+        "raw_text": "Parsed text remains available in the case detail.",
+    })
+
+    response = review_client.get(
+        "/api/cases/case-review/documents/missing-original/content"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "original document is unavailable"
+    document = next(
+        item
+        for item in review_client.get("/api/cases/case-review").json()["documents"]
+        if item["document_id"] == "missing-original"
+    )
+    assert document["raw_text"] == "Parsed text remains available in the case detail."
+
+
 def test_non_pdf_content_cannot_render_as_html(runtime, review_client):
     runtime.repository.add_document("case-review", "html", {
         "filename": "danger.html", "content_type": "text/html",

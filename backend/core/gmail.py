@@ -356,3 +356,49 @@ class GmailClient:
             .send(userId=self.address, body={"id": draft_id})
             .execute()
         )
+
+    def create_sender_filter(self, sender: str) -> dict[str, Any]:
+        """Create a Gmail filter removing messages from sender from INBOX."""
+        if not self.is_configured:
+            return {"id": "filter-local", "criteria": {"from": sender}}
+        body = {
+            "criteria": {"from": sender},
+            "action": {"removeLabelIds": ["INBOX"]},
+        }
+        return (
+            self.service()
+            .users()
+            .settings()
+            .filters()
+            .create(userId=self.address, body=body)
+            .execute()
+        )
+
+    def delete_filter(self, filter_id: str) -> bool:
+        """Delete an existing Gmail filter by ID."""
+        if not self.is_configured or not filter_id or filter_id.startswith("filter-local"):
+            return False
+        try:
+            self.service().users().settings().filters().delete(
+                userId=self.address, id=filter_id
+            ).execute()
+            return True
+        except Exception:
+            return False
+
+    def list_filters(self) -> list[dict[str, Any]]:
+        """List current filters in Gmail."""
+        if not self.is_configured:
+            return []
+        try:
+            res = (
+                self.service()
+                .users()
+                .settings()
+                .filters()
+                .list(userId=self.address)
+                .execute()
+            )
+            return res.get("filter", [])
+        except Exception:
+            return []

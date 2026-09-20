@@ -1,17 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  BookOpen,
   CalendarDays,
   Clock3,
   Database,
-  ExternalLink,
   FileText,
   RefreshCw,
   Search,
   ShieldCheck,
-  X,
 } from "lucide-react";
 import { PageHeading } from "@/components/app-shell/page-heading";
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
@@ -19,7 +16,6 @@ import { useToast } from "@/components/ui/toast";
 import {
   fetchAssumptionRegistry,
   fetchKnowledgeBaseWeeks,
-  fetchKnowledgePreview,
   publishWeeklySnapshot,
   type AssumptionRecord,
   type KnowledgeBaseWeek,
@@ -41,8 +37,6 @@ export default function KnowledgeBasePage() {
   const weeks = useLiveQuery((signal) => fetchKnowledgeBaseWeeks(signal), []);
   const registry = useLiveQuery((signal) => fetchAssumptionRegistry(signal), []);
   const [publishing, setPublishing] = useState(false);
-  const [preview, setPreview] = useState<{ title: string; html: string } | null>(null);
-  const [previewLoading, setPreviewLoading] = useState<string | null>(null);
   const [registryFilter, setRegistryFilter] = useState<RegistryFilter>("all");
   const [registryQuery, setRegistryQuery] = useState("");
 
@@ -82,22 +76,6 @@ export default function KnowledgeBasePage() {
       });
     } finally {
       setPublishing(false);
-    }
-  };
-
-  const openPreview = async (week: KnowledgeBaseWeek) => {
-    setPreviewLoading(week.week);
-    try {
-      const html = await fetchKnowledgePreview(`ClassAll_Assumptions_${week.week}`);
-      setPreview({ title: `ClassAll weekly knowledge, ${formatWeek(week.week)}`, html });
-    } catch (error) {
-      toast({
-        title: "Preview could not be opened",
-        description: error instanceof Error ? error.message : "Please retry.",
-        tone: "warning",
-      });
-    } finally {
-      setPreviewLoading(null);
     }
   };
 
@@ -148,9 +126,9 @@ export default function KnowledgeBasePage() {
         latest={latest}
       />
 
-      <section className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,.75fr)]">
-        <article className="glass glass-sheen min-w-0 overflow-hidden">
-          <header className="flex flex-col gap-3 border-b border-line px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <section className="grid min-w-0 gap-5 xl:max-h-[850px] xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,.75fr)]">
+        <article className="glass glass-sheen flex min-w-0 flex-col overflow-hidden">
+          <header className="flex shrink-0 flex-col gap-3 border-b border-line px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">Weekly briefings</h2>
               <p className="mt-1 text-[12.5px] text-ink-500">
@@ -163,27 +141,27 @@ export default function KnowledgeBasePage() {
           </header>
 
           {!publications.length ? (
-            <EmptyState
-              title="No weekly briefings yet"
-              detail="Publish the current week after reviewed operational cases are available."
-            />
+            <div className="flex flex-1 items-center justify-center p-6">
+              <EmptyState
+                title="No weekly briefings yet"
+                detail="Publish the current week after reviewed operational cases are available."
+              />
+            </div>
           ) : (
-            <ol className="max-h-[760px] divide-y divide-line overflow-y-auto overscroll-contain">
+            <ol className="flex-1 min-h-0 divide-y divide-line overflow-y-auto max-h-[600px] xl:max-h-none">
               {publications.map((week, index) => (
                 <WeeklyBriefing
                   key={week.week}
                   week={week}
                   latest={index === 0}
-                  loading={previewLoading === week.week}
-                  onPreview={() => void openPreview(week)}
                 />
               ))}
             </ol>
           )}
         </article>
 
-        <article className="glass glass-sheen min-w-0 overflow-hidden">
-          <header className="border-b border-line px-5 py-4">
+        <article className="glass glass-sheen flex min-w-0 flex-col overflow-hidden">
+          <header className="shrink-0 border-b border-line px-5 py-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">Assumption registry</h2>
@@ -223,26 +201,30 @@ export default function KnowledgeBasePage() {
             </div>
           </header>
 
-          {registry.error && !registry.data ? (
-            <ErrorState message={registry.error} retry={() => void registry.refresh()} />
-          ) : registry.loading && !registry.data ? (
-            <LoadingState label="Loading governed assumptions" />
-          ) : !visibleAssumptions.length ? (
-            <EmptyState
-              title={assumptions.length ? "No assumptions match" : "No governed assumptions"}
-              detail={assumptions.length ? "Try another search or status filter." : "Reviewed assumptions will accumulate here."}
-            />
-          ) : (
-            <ul className="max-h-[760px] divide-y divide-line overflow-y-auto overscroll-contain">
-              {visibleAssumptions.map((item) => <AssumptionItem key={item.assumption_id} item={item} />)}
-            </ul>
-          )}
+          <div className="flex min-h-0 flex-1 flex-col">
+            {registry.error && !registry.data ? (
+              <div className="flex flex-1 items-center justify-center p-6">
+                <ErrorState message={registry.error} retry={() => void registry.refresh()} />
+              </div>
+            ) : registry.loading && !registry.data ? (
+              <div className="flex flex-1 items-center justify-center p-6">
+                <LoadingState label="Loading governed assumptions" />
+              </div>
+            ) : !visibleAssumptions.length ? (
+              <div className="flex flex-1 items-center justify-center p-6">
+                <EmptyState
+                  title={assumptions.length ? "No assumptions match" : "No governed assumptions"}
+                  detail={assumptions.length ? "Try another search or status filter." : "Reviewed assumptions will accumulate here."}
+                />
+              </div>
+            ) : (
+              <ul className="flex-1 min-h-0 divide-y divide-line overflow-y-auto max-h-[600px] xl:max-h-none">
+                {visibleAssumptions.map((item) => <AssumptionItem key={item.assumption_id} item={item} />)}
+              </ul>
+            )}
+          </div>
         </article>
       </section>
-
-      <KnowledgeFlow />
-
-      <KnowledgePreview preview={preview} onClose={() => setPreview(null)} />
     </div>
   );
 }
@@ -298,13 +280,9 @@ function KnowledgeSummary({
 function WeeklyBriefing({
   week,
   latest,
-  loading,
-  onPreview,
 }: {
   week: KnowledgeBaseWeek;
   latest: boolean;
-  loading: boolean;
-  onPreview: () => void;
 }) {
   const outcomes = [
     { label: "Matched", value: week.status_counts.OK || 0, tone: "bg-matched-500" },
@@ -315,11 +293,6 @@ function WeeklyBriefing({
   const categories = Object.entries(week.category_counts)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 3);
-  const isRealDriveUrl =
-    Boolean(week.drive_url?.startsWith("https://")) &&
-    !week.drive_url?.includes("ClassAll_");
-  const externalDriveUrl = isRealDriveUrl ? week.drive_url : null;
-
   return (
     <li className="px-5 py-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -385,30 +358,6 @@ function WeeklyBriefing({
             </div>
           )}
         </div>
-
-        <div className="flex shrink-0 items-center gap-2">
-          {externalDriveUrl ? (
-            <a href={externalDriveUrl} target="_blank" rel="noreferrer" className="btn-glass active:scale-95">
-              <ExternalLink className="size-4" />
-              Google Doc
-            </a>
-          ) : (
-            <button
-              type="button"
-              className="btn-glass active:scale-95"
-              disabled={loading}
-              onClick={onPreview}
-              title="Open document briefing"
-            >
-              <FileText className="size-4" />
-              Doc
-            </button>
-          )}
-          <button type="button" className="btn-primary active:scale-95" disabled={loading} onClick={onPreview}>
-            {loading ? <RefreshCw className="size-4 animate-spin" /> : <BookOpen className="size-4" />}
-            {loading ? "Opening…" : "Read briefing"}
-          </button>
-        </div>
       </div>
     </li>
   );
@@ -417,7 +366,7 @@ function WeeklyBriefing({
 function AssumptionItem({ item }: { item: AssumptionRecord }) {
   const accepted = item.status === "accepted";
   return (
-    <li className="px-5 py-4">
+    <li className="px-5 py-4 transition-colors hover:bg-canvas/50">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[12.5px] font-semibold text-ink-900">{humanize(item.field)}</p>
@@ -440,102 +389,6 @@ function AssumptionItem({ item }: { item: AssumptionRecord }) {
     </li>
   );
 }
-
-function KnowledgeFlow() {
-  const steps = [
-    { title: "Reviewed cases", detail: "Only stored operational evidence enters the weekly run." },
-    { title: "Weekly synthesis", detail: "Counts, outcomes, and recurring assumptions are summarized." },
-    { title: "Governed registry", detail: "Accepted and proposed interpretations remain traceable." },
-    { title: "Rendered briefing", detail: "Reviewers read a safe document preview, never raw stored HTML." },
-  ];
-  return (
-    <section className="glass glass-sheen overflow-hidden">
-      <header className="border-b border-line px-5 py-4">
-        <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">Knowledge publication flow</h2>
-      </header>
-      <ol className="grid divide-y divide-line sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4">
-        {steps.map((step, index) => (
-          <li key={step.title} className="px-5 py-4">
-            <p className="font-mono text-[10px] font-semibold text-brand-600">0{index + 1}</p>
-            <p className="mt-2 text-[12.5px] font-semibold text-ink-900">{step.title}</p>
-            <p className="mt-1 text-pretty text-[11.5px] leading-5 text-ink-400">{step.detail}</p>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
-
-function KnowledgePreview({
-  preview,
-  onClose,
-}: {
-  preview: { title: string; html: string } | null;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    if (!preview) return;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.body.style.overflow = previous;
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [onClose, preview]);
-
-  if (!preview) return null;
-
-  return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-0 sm:p-5">
-      <button type="button" aria-label="Close knowledge preview" onClick={onClose} className="absolute inset-0 bg-overlay backdrop-blur-sm" />
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-label={preview.title}
-        className="glass-solid relative flex h-full w-full flex-col overflow-hidden rounded-none sm:h-[90vh] sm:max-w-6xl sm:rounded-2xl"
-      >
-        <header className="flex min-h-16 items-center gap-3 border-b border-line px-4 py-3 sm:px-5">
-          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200">
-            <BookOpen className="size-[17px]" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[13.5px] font-semibold text-ink-900">{preview.title}</p>
-            <p className="mt-0.5 text-[11px] text-ink-400">Rendered Markdown · authenticated preview</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              title="Open document in new browser tab"
-              onClick={() => {
-                const blob = new Blob([preview.html], { type: "text/html" });
-                const url = URL.createObjectURL(blob);
-                window.open(url, "_blank");
-              }}
-              className="flex items-center gap-1.5 rounded-lg border border-line bg-surface/80 px-2.5 py-1.5 text-[12px] font-medium text-ink-600 transition-colors hover:bg-surface hover:text-ink-900 active:scale-95"
-            >
-              <ExternalLink className="size-3.5" />
-              <span className="hidden sm:inline">New tab</span>
-            </button>
-            <button type="button" aria-label="Close preview" onClick={onClose} className="grid size-9 place-items-center rounded-xl text-ink-400 transition-colors hover:bg-surface hover:text-ink-900 active:scale-95">
-              <X className="size-5" />
-            </button>
-          </div>
-        </header>
-        <iframe
-          title={preview.title}
-          sandbox=""
-          srcDoc={preview.html}
-          className="min-h-0 flex-1 bg-white"
-        />
-      </section>
-    </div>
-  );
-}
-
 function humanize(value: string) {
   return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

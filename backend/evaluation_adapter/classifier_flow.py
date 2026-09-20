@@ -160,29 +160,10 @@ def _check_missing_attachments(
     category: EmailCategory,
     attachment_previews: dict[str, str] | None,
 ) -> bool:
-    """Guardrail to flag missing, corrupted, or unreadable attachments for DOCUMENT_COMPARISON."""
+    """Guardrail to flag missing attachments for DOCUMENT_COMPARISON."""
     if category != EmailCategory.DOCUMENT_COMPARISON:
         return False
-
-    if not attachment_previews:
-        return True
-
-    # Check if there are valid readable attachments
-    unreadable_tags = [
-        "[Unreadable or Corrupted File]",
-        "[Scanned or Image-only PDF]",
-    ]
-
-    readable_count = 0
-    for _name, content in attachment_previews.items():
-        if not content:
-            continue
-        trimmed = content.strip()
-        if trimmed and trimmed not in unreadable_tags and len(trimmed) > 10:
-            readable_count += 1
-
-    # In maritime BL vs SI comparison, we expect at least 1 readable attachment (or 2)
-    return readable_count < 1
+    return len(attachment_previews or {}) < 2
 
 
 def _classify_with_heuristics(
@@ -344,7 +325,7 @@ Respond with the exact JSON matching EmailClassification schema."""
     live_client = get_client()
     if live_client is not None:
         try:
-            model_name = os.environ.get("PRIMARY_MODEL", "gemini-2.5-flash")
+            model_name = os.environ.get("GEMINI_MODEL") or os.environ.get("PRIMARY_MODEL", "gemini-2.5-flash")
             response = live_client.models.generate_content(
                 model=model_name,
                 contents=user_prompt,
@@ -374,11 +355,10 @@ Respond with the exact JSON matching EmailClassification schema."""
                 classification.category == EmailCategory.DOCUMENT_COMPARISON
             )
 
-            if (
-                classification.category == EmailCategory.DOCUMENT_COMPARISON
-                and _check_missing_attachments(classification.category, att_dict)
-            ):
-                classification.missing_attachments_flag = True
+            if classification.category == EmailCategory.DOCUMENT_COMPARISON:
+                classification.missing_attachments_flag = _check_missing_attachments(
+                    classification.category, att_dict
+                )
 
             return classification
 
@@ -386,11 +366,23 @@ Respond with the exact JSON matching EmailClassification schema."""
             raise
         except Exception as e:
             err_str = str(e).lower()
-            if "429" in err_str or "resourceexhausted" in err_str or "rate limit" in err_str or "too many requests" in err_str:
+            if (
+                "429" in err_str
+                or "resourceexhausted" in err_str
+                or "rate limit" in err_str
+                or "too many requests" in err_str
+                or "sdk failed" in err_str
+                or "request failed" in err_str
+            ):
                 raise
             logger.warning(
                 f"Vertex AI inference failed for {email_id}: {e}. Executing heuristic fallback."
             )
+        finally:
+            try:
+                live_client.close()
+            except Exception:
+                pass
 
     # Deterministic rule-based heuristic classification fallback
     return _classify_with_heuristics(email_id, subject, sender, body, att_dict)

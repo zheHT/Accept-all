@@ -108,7 +108,7 @@ function SignInScreen({ onSignIn }: { onSignIn: () => Promise<void> }) {
         <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-teal-50 text-teal-700">
           <ShieldCheck className="h-6 w-6" />
         </div>
-        <h1 className="mt-4 text-xl font-bold tracking-tight text-ink-900">ClassAll Operations</h1>
+        <h1 className="mt-4 text-xl font-bold tracking-tight text-ink-900">ShipVerify Operations</h1>
         <p className="mt-1 text-xs text-ink-500">Authorized reviewer authentication required.</p>
         {error && (
           <div className="mt-3 rounded-md bg-rose-50 p-3 text-left text-xs text-rose-700">

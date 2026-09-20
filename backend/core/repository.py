@@ -5,6 +5,7 @@ import threading
 from contextlib import suppress
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from email.utils import parseaddr
 from typing import Any, Protocol
 
 from google.api_core.exceptions import AlreadyExists, Conflict, NotFound
@@ -48,6 +49,12 @@ class CaseRepository(Protocol):
     def list_knowledge_base_weeks(self) -> list[dict[str, Any]]: ...
     def save_assumption(self, assumption: dict[str, Any]) -> None: ...
     def list_assumptions(self, status: str | None = None) -> list[dict[str, Any]]: ...
+    def block_sender(
+        self, sender: str, reason: str = "", filter_id: str | None = None
+    ) -> dict[str, Any]: ...
+    def unblock_sender(self, sender: str) -> bool: ...
+    def is_sender_blocked(self, sender: str) -> bool: ...
+    def list_blocked_senders(self) -> list[dict[str, Any]]: ...
 
 
 class InMemoryRepository:
@@ -67,6 +74,7 @@ class InMemoryRepository:
         self.weekly_summaries: set[str] = set()
         self.knowledge_base_weeks: dict[str, dict[str, Any]] = {}
         self.assumptions: dict[str, dict[str, Any]] = {}
+        self.blocked_senders: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
 
     def create_run(self, run_id: str, expected: int | None = None) -> dict[str, Any]:
@@ -278,6 +286,52 @@ class InMemoryRepository:
             if status:
                 items = [item for item in items if item.get("status") == status]
             return deepcopy(items)
+
+    def block_sender(
+        self, sender: str, reason: str = "", filter_id: str | None = None
+    ) -> dict[str, Any]:
+        raw_sender = sender.strip()
+        _, email_addr = parseaddr(raw_sender)
+        key = (email_addr or raw_sender).lower()
+        now = utcnow()
+        with self._lock:
+            record = {
+                "sender": key,
+                "original_sender": raw_sender,
+                "reason": reason,
+                "filter_id": filter_id,
+                "blocked_at": now.isoformat(),
+            }
+            self.blocked_senders[key] = record
+            return deepcopy(record)
+
+    def unblock_sender(self, sender: str) -> bool:
+        raw_sender = sender.strip()
+        _, email_addr = parseaddr(raw_sender)
+        key = (email_addr or raw_sender).lower()
+        with self._lock:
+            return self.blocked_senders.pop(key, None) is not None
+
+    def is_sender_blocked(self, sender: str) -> bool:
+        if not sender:
+            return False
+        raw_sender = sender.strip()
+        _, email_addr = parseaddr(raw_sender)
+        keys_to_check = {raw_sender.lower()}
+        if email_addr:
+            keys_to_check.add(email_addr.lower())
+        with self._lock:
+            for k in keys_to_check:
+                if k in self.blocked_senders:
+                    return True
+            for blocked_key in self.blocked_senders:
+                if any(blocked_key in k for k in keys_to_check):
+                    return True
+            return False
+
+    def list_blocked_senders(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return deepcopy(list(self.blocked_senders.values()))
 
 
 class FirestoreRepository:
@@ -583,3 +637,50 @@ class FirestoreRepository:
         coll = self.client.collection("assumptions")
         query = coll.where(filter=FieldFilter("status", "==", status)) if status else coll
         return [doc.to_dict() for doc in query.stream()]
+
+    def block_sender(
+        self, sender: str, reason: str = "", filter_id: str | None = None
+    ) -> dict[str, Any]:
+        raw_sender = sender.strip()
+        _, email_addr = parseaddr(raw_sender)
+        key = (email_addr or raw_sender).lower()
+        now = utcnow()
+        record = {
+            "sender": key,
+            "original_sender": raw_sender,
+            "reason": reason,
+            "filter_id": filter_id,
+            "blocked_at": now.isoformat(),
+        }
+        doc_id = hashlib.sha256(key.encode()).hexdigest()[:32]
+        self.client.collection("blocked_senders").document(doc_id).set(record)
+        return record
+
+    def unblock_sender(self, sender: str) -> bool:
+        raw_sender = sender.strip()
+        _, email_addr = parseaddr(raw_sender)
+        key = (email_addr or raw_sender).lower()
+        doc_id = hashlib.sha256(key.encode()).hexdigest()[:32]
+        ref = self.client.collection("blocked_senders").document(doc_id)
+        if ref.get().exists:
+            ref.delete()
+            return True
+        return False
+
+    def is_sender_blocked(self, sender: str) -> bool:
+        if not sender:
+            return False
+        raw_sender = sender.strip()
+        _, email_addr = parseaddr(raw_sender)
+        keys_to_check = {raw_sender.lower()}
+        if email_addr:
+            keys_to_check.add(email_addr.lower())
+        for k in keys_to_check:
+            doc_id = hashlib.sha256(k.encode()).hexdigest()[:32]
+            if self.client.collection("blocked_senders").document(doc_id).get().exists:
+                return True
+        return False
+
+    def list_blocked_senders(self) -> list[dict[str, Any]]:
+        docs = self.client.collection("blocked_senders").stream()
+        return [doc.to_dict() for doc in docs]

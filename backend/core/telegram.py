@@ -10,17 +10,17 @@ import httpx
 from backend.core.repository import CaseRepository, utcnow
 
 TELEGRAM_BOT_DESCRIPTION = (
-    "ClassAll is an intelligent maritime shipping document triage and reconciliation agent. "
+    "ShipVerify is an intelligent maritime shipping document triage and reconciliation agent. "
     "Upload Shipping Instructions (SI) and draft Bills of Lading (BL) to automatically detect "
     "discrepancies across 7 verified fields, review alerts, and coordinate email responses."
 )
 
 TELEGRAM_BOT_SHORT_DESCRIPTION = (
-    "ClassAll Maritime Shipping Document Triage & SI/BL Discrepancy Verification Agent."
+    "ShipVerify Maritime Shipping Document Triage & SI/BL Discrepancy Verification Agent."
 )
 
 TELEGRAM_WELCOME_TEXT = (
-    "🚢 <b>Welcome to ClassAll Maritime Triage Agent!</b>\n\n"
+    "🚢 <b>Welcome to ShipVerify Maritime Triage Agent!</b>\n\n"
     "I am your automated operations assistant for maritime shipping correspondence "
     "and shipping document verification.\n\n"
     "<b>What I can do for you:</b>\n"
@@ -42,7 +42,7 @@ TELEGRAM_WELCOME_TEXT = (
 )
 
 TELEGRAM_HELP_TEXT = (
-    "📋 <b>ClassAll Maritime Agent — Command Guide:</b>\n\n"
+    "📋 <b>ShipVerify Maritime Agent — Command Guide:</b>\n\n"
     "<b>Case Intake Workflow:</b>\n"
     "• <code>/newcase</code> — Generate a unique tracking token (e.g. <code>#a1b2c3</code>)\n"
     "• Attach SI and BL documents (PDF, Word, or image) using caption <code>#TOKEN</code>\n"
@@ -74,8 +74,8 @@ TELEGRAM_HELP_TEXT = (
 
 class TelegramClient:
     def __init__(self, token: str, timeout: float = 30.0) -> None:
-        self.token = token
-        self.base_url = f"https://api.telegram.org/bot{token}"
+        self.token = (token or "").strip()
+        self.base_url = f"https://api.telegram.org/bot{self.token}"
         self.timeout = timeout
 
     def _call(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -246,5 +246,48 @@ class TelegramReviewNotifier:
         self.repository.append_event(
             case["case_id"],
             "telegram_alert_sent",
+            {"message_id": message.get("message_id"), "chat_id": str(chat_id)},
+        )
+
+    def send_spam_alert(self, case: dict[str, Any]) -> None:
+        chat_id = case.get("owner_chat_id") or self.admin_chat_id
+        if not chat_id:
+            return
+        block_id = secrets.token_urlsafe(12)
+        not_spam_id = secrets.token_urlsafe(12)
+        common = {
+            "case_id": case["case_id"],
+            "chat_id": str(chat_id),
+            "expected_version": case.get("version", 0),
+            "expires_at": utcnow() + timedelta(days=7),
+        }
+        self.repository.create_action(block_id, {**common, "action": "block"})
+        self.repository.create_action(not_spam_id, {**common, "action": "not_spam"})
+        sender = case.get("sender") or "Unknown"
+        subject = case.get("subject") or "No subject"
+        text = (
+            f"🚨 <b>Spam Email Detected</b>\n"
+            f"Case: <code>{html.escape(case['case_id'])}</code>\n"
+            f"From: <code>{html.escape(sender)}</code>\n"
+            f"Subject: {html.escape(subject)}"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "🚫 BLOCK SENDER", "callback_data": f"block:{block_id}"},
+                    {"text": "✅ NOT SPAM", "callback_data": f"not_spam:{not_spam_id}"},
+                ],
+                [
+                    {
+                        "text": "VIEW IN INBOX",
+                        "url": f"{self.dashboard_base_url}/inbox?email={case['case_id']}",
+                    }
+                ],
+            ]
+        }
+        message = self.client.send_message(chat_id, text, reply_markup=keyboard)
+        self.repository.append_event(
+            case["case_id"],
+            "telegram_spam_alert_sent",
             {"message_id": message.get("message_id"), "chat_id": str(chat_id)},
         )

@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Any
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +38,20 @@ class Settings(BaseSettings):
     gmail_reconcile_limit: int = Field(default=50, ge=1, le=500)
     gmail_reconcile_schedule: str = "0 * * * *"
     processing_lease_seconds: int = Field(default=600, ge=60)
+
+    @field_validator(
+        "telegram_bot_token",
+        "telegram_webhook_secret",
+        "app_signing_secret",
+        "telegram_admin_chat_id",
+        "grader_ingest_key",
+        mode="before",
+    )
+    @classmethod
+    def _strip_tokens(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
     @property
     def dashboard_auth_required(self) -> bool:

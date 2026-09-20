@@ -90,7 +90,7 @@ uv run uvicorn --app-dir "D:\Downloads\sdoc-hackathon-docker\server" app:app --p
 
 ### Method 1: Automated End-to-End Evaluation (`eval_inbox.py`)
 
-The repository includes an evaluation runner in [`scripts/eval_inbox.py`](file:///d:/agentic_ai_project/classall-platform/scripts/eval_inbox.py). It automatically connects to the server, runs Vertex AI live inference on GCP, maps categories, saves the output, and calls `POST /submit`:
+The repository includes an evaluation runner in [`scripts/eval_inbox.py`](../scripts/eval_inbox.py). It automatically connects to the server, runs Vertex AI live inference on GCP, maps categories, saves the output, and calls `POST /submit`:
 
 ```bash
 # Evaluate all emails from the server and auto-submit:
@@ -104,7 +104,7 @@ uv run python scripts/eval_inbox.py --source http://localhost:8080 --server-comp
 
 ### Method 2: Calling `inbox.submit` via Python
 
-Using the [`loader.py`](file:///d:/agentic_ai_project/classall-platform/loader.py) SDK:
+Using the [`loader.py`](../loader.py) SDK:
 
 ```python
 import json

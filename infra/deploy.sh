@@ -9,6 +9,29 @@ GMAIL_RECONCILE_SCHEDULE="${GMAIL_RECONCILE_SCHEDULE:-0 * * * *}"
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
 
+# Windows commonly exposes `python3` as a Microsoft Store alias while the
+# installed interpreter is available as `python`. Prefer the working command
+# so Telegram command registration works across local environments.
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "$PYTHON_BIN" ] && command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+fi
+if [ -z "$PYTHON_BIN" ] && command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+fi
+if [ -z "$PYTHON_BIN" ]; then
+    echo "Error: Python is required for Telegram command registration." >&2
+    exit 1
+fi
+
+run_firebase() {
+    if [ -n "${APPDATA:-}" ] && [ -f "${APPDATA}/npm/node_modules/firebase-tools/lib/bin/firebase.js" ]; then
+        node "${APPDATA}/npm/node_modules/firebase-tools/lib/bin/firebase.js" "$@"
+    else
+        firebase "$@"
+    fi
+}
+
 REQUIRED_SECRETS=(
     "grader-ingest-key"
     "app-signing-secret"
@@ -170,37 +193,34 @@ fi
 
 if gcloud secrets versions list telegram-bot-token --project "$PROJECT_ID" --filter="state=ENABLED" --limit=1 --format="value(name)" | grep -q .; then
     echo "Registering Telegram webhook and updating bot profile..."
-    TOKEN=$(gcloud secrets versions access latest --secret=telegram-bot-token --project="$PROJECT_ID")
-    WEBHOOK_SECRET=$(gcloud secrets versions access latest --secret=telegram-webhook-secret --project="$PROJECT_ID")
+    TOKEN=$(gcloud secrets versions access latest --secret=telegram-bot-token --project="$PROJECT_ID" | tr -d '\r\n')
+    WEBHOOK_SECRET=$(gcloud secrets versions access latest --secret=telegram-webhook-secret --project="$PROJECT_ID" | tr -d '\r\n')
 
-    curl -s -X POST "https://api.telegram.org/bot${TOKEN}/setWebhook" \
+    curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TOKEN}/setWebhook" \
         -d "url=${API_URL}/api/telegram-webhook" \
         -d "secret_token=${WEBHOOK_SECRET}" \
         -d 'allowed_updates=["message","callback_query"]' \
         -d "drop_pending_updates=true" >/dev/null
 
-    COMMANDS_JSON=$(python3 -m backend.api.bot_commands)
+    COMMANDS_JSON=$("$PYTHON_BIN" -m backend.api.bot_commands)
     COMMANDS_RESPONSE=$(curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TOKEN}/setMyCommands" \
         -H "Content-Type: application/json" \
         -d "$COMMANDS_JSON")
-    printf '%s' "$COMMANDS_RESPONSE" | python3 -c 'import json, sys; result = json.load(sys.stdin); sys.exit(0 if result.get("ok") is True else "Telegram command registration failed")'
+    printf '%s' "$COMMANDS_RESPONSE" | "$PYTHON_BIN" -c 'import json, sys; result = json.load(sys.stdin); sys.exit(0 if result.get("ok") is True else "Telegram command registration failed")'
 
     curl -s -X POST "https://api.telegram.org/bot${TOKEN}/setMyDescription" \
         -H "Content-Type: application/json" \
-        -d '{"description":"ClassAll is an intelligent maritime shipping document triage and reconciliation agent. Upload Shipping Instructions (SI) and draft Bills of Lading (BL) to automatically detect discrepancies across 7 verified fields, review alerts, and coordinate email responses."}' >/dev/null
+        -d '{"description":"ShipVerify is an intelligent maritime shipping document triage and reconciliation agent. Upload Shipping Instructions (SI) and draft Bills of Lading (BL) to automatically detect discrepancies across 7 verified fields, review alerts, and coordinate email responses."}' >/dev/null
 
     curl -s -X POST "https://api.telegram.org/bot${TOKEN}/setMyShortDescription" \
         -H "Content-Type: application/json" \
-        -d '{"short_description":"ClassAll Maritime Shipping Document Triage & SI/BL Discrepancy Verification Agent."}' >/dev/null
+        -d '{"short_description":"ShipVerify Maritime Shipping Document Triage & SI/BL Discrepancy Verification Agent."}' >/dev/null
 fi
 
 echo "Configuring and deploying Firebase..."
-APP_ID=$(firebase apps:list WEB --project "$PROJECT_ID" --json 2>/dev/null | grep -B 2 -A 5 '"displayName": "ClassAll Reviewer"' | grep '"appId"' | head -n 1 | sed -E 's/.*"appId": "([^"]+)".*/\1/' || true)
-if [ -z "$APP_ID" ]; then
-    APP_ID="1:669899307969:web:d2e29d52006cdde8f48d40"
-fi
+APP_ID="${FIREBASE_WEB_APP_ID:-1:669899307969:web:d2e29d52006cdde8f48d40}"
 
-SDK_CONFIG=$(firebase apps:sdkconfig WEB "$APP_ID" --project "$PROJECT_ID" --json 2>/dev/null || true)
+SDK_CONFIG=$(run_firebase apps:sdkconfig WEB "$APP_ID" --project "$PROJECT_ID" --json 2>/dev/null || true)
 
 export NEXT_PUBLIC_API_URL="$API_URL"
 API_KEY=$(echo "$SDK_CONFIG" | grep '"apiKey"' | head -n 1 | sed -E 's/.*"apiKey": "([^"]+)".*/\1/' || true)
@@ -216,7 +236,7 @@ if [ ! -d "frontend/node_modules" ]; then
     npm ci --prefix frontend
 fi
 npm run build --prefix frontend
-firebase deploy --project "$PROJECT_ID" --only hosting,firestore:rules,firestore:indexes
+run_firebase deploy --project "$PROJECT_ID" --only hosting,firestore:rules,firestore:indexes
 
 echo ""
 echo "=========================================="

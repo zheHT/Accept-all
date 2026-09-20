@@ -102,7 +102,6 @@ def test_telegram_week_command_returns_published_summary(runtime):
         {
             "week": "2026-W38",
             "summary_narrative": "Three recurring consignee issues were found.",
-            "drive_url": "https://docs.google.com/document/d/doc-1/edit",
         }
     )
     client = TestClient(create_app(runtime))

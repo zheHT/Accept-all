@@ -40,7 +40,7 @@ class CaseExplainer:
     def assist(self, question: str) -> str:
         if not self.enabled:
             return (
-                "🚢 <b>ClassAll Maritime AI Agent</b>\n\n"
+                "🚢 <b>ShipVerify Maritime AI Agent</b>\n\n"
                 "I assist with shipping correspondence triage and document reconciliation "
                 "between Shipping Instructions (SI) and draft Bills of Lading (BL).\n\n"
                 "• Send <code>/newcase</code> to generate a case token.\n"
@@ -52,7 +52,7 @@ class CaseExplainer:
 
         client = genai.Client(vertexai=True, project=self.project, location=self.location)
         system_prompt = (
-            "You are ClassAll AI, an intelligent maritime shipping document triage and verification assistant. "
+            "You are ShipVerify AI, an intelligent maritime shipping document triage and verification assistant. "
             "You assist shipping lines, freight forwarders, and logistics operators in verifying Shipping Instructions (SI) "
             "against draft Bills of Lading (BL), categorizing shipping correspondence (BL_COMPARISON, SI_REQUEST, INVOICE_QUERY, GENERAL, SPAM), "
             "and identifying discrepancies across the 7 verified contract fields: shipper, consignee, notify party, "

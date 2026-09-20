@@ -126,13 +126,20 @@ function classification(category?: string | null): EmailClassification {
 }
 
 function emailStatus(item: CaseSummary): EmailStatus {
-  if (item.category === "SPAM") return "filtered";
+  if (item.category === "SPAM" || item.is_sender_blocked) return "filtered";
   if (item.status === "NEEDS_REVIEW") return "needs_review";
   if (item.processing_state === "QUEUED" || item.processing_state === "PROCESSING") {
     return "processing";
   }
-  if (item.status) return "completed";
-  if (classification(item.category) === "document_comparison") return "ready_for_verification";
+  const kind = classification(item.category);
+  const stage = item.workflow_state?.stage;
+  if (stage === "COMPLETED" || stage === "RETURNED") {
+    return "completed";
+  }
+  if (kind === "document_comparison") {
+    if (item.status) return "completed";
+    return "ready_for_verification";
+  }
   return "classified";
 }
 
@@ -161,7 +168,7 @@ function formatReceived(value?: string | null): string {
   }).format(date);
 }
 
-function bytesLabel(bytes: number): string {
+export function bytesLabel(bytes: number): string {
   if (!bytes) return "Size unavailable";
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -192,8 +199,10 @@ export function inboxSummary(item: CaseSummary): InboxEmail {
     senderEmail: displayEmail(item.sender),
     recipient: "Connected Gmail inbox",
     subject: item.subject || "No subject",
-    preview: item.review_reason || `${item.defect_fields.length} flagged field${item.defect_fields.length === 1 ? "" : "s"}`,
-    body: [],
+    preview: item.body
+      ? (item.body.slice(0, 180) || item.subject || "No content")
+      : (item.review_reason || `${item.defect_fields.length} flagged field${item.defect_fields.length === 1 ? "" : "s"}`),
+    body: item.body ? item.body.split(/\n{2,}/).filter(Boolean) : [],
     receivedTime: relativeTime(when),
     receivedDay: receivedDay(when),
     receivedLabel: formatReceived(when),
@@ -205,6 +214,11 @@ export function inboxSummary(item: CaseSummary): InboxEmail {
     attachments: [],
     caseRef: kind === "document_comparison" ? item.case_id : undefined,
     shipment: item.source_message_id || item.case_id,
+    version: item.version,
+    workflowState: item.workflow_state,
+    availableActions: item.available_actions,
+    isSenderBlocked: item.is_sender_blocked,
+    assignedTeam: item.assigned_team,
   };
 }
 
@@ -226,6 +240,7 @@ export function inboxDetail(item: CaseDetail): InboxEmail {
     body: item.body ? item.body.split(/\n{2,}/).filter(Boolean) : ["No email body was recorded."],
     attachments: files,
     classificationNote: item.rationale || inboxSummary(item).classificationNote,
+    siArtifact: item.si_artifact,
   };
 }
 
@@ -590,9 +605,9 @@ export function periodData(response: DashboardResponse): PeriodData {
     matched: response.metrics.matches,
     mismatch: response.metrics.mismatches,
     needsReview: response.metrics.needs_review,
-    deltaPct: 0,
+    deltaPct: response.metrics.delta_pct ?? 0,
     volume: [],
-    avgTurnaround: "Live",
+    avgTurnaround: response.metrics.avg_turnaround ?? "Live",
     autoCleared: total ? Math.round((response.metrics.matches / total) * 100) : 0,
   };
 }
