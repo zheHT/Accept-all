@@ -34,9 +34,15 @@ STEP 3: RUN THIS TEST SCRIPT
 """
 
 import json
-import requests
 import sys
 from pathlib import Path
+
+try:
+    import requests
+except ImportError as e:
+    raise SystemExit(
+        "Missing dependency 'requests'. Install it with: pip install requests"
+    ) from e
 
 # 1. Dynamically resolve the absolute path to result.json
 current_dir = Path(__file__).parent
