@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 import google.auth.transport.requests
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import Response
 from google.api_core.exceptions import Conflict, GoogleAPIError, NotFound
 from google.cloud import secretmanager
 from google.oauth2 import id_token
@@ -25,7 +25,6 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from backend.api.field_review import field_review_changes
-from backend.api.markdown_preview import render_preview_document
 from backend.api.views import (
     build_case_detail,
     build_case_summary,
@@ -72,7 +71,6 @@ from backend.core.schemas import (
 from backend.core.security import content_hash, sign_state, verify_state
 from backend.core.telegram import TELEGRAM_HELP_TEXT, TELEGRAM_WELCOME_TEXT
 from backend.core.workflows import create_case_draft
-from backend.integrations.knowledge import secure_knowledge_publisher
 
 _cache_by_repo: dict[int, tuple[list[dict[str, Any]], float]] = {}
 _cache_ttl: float = 10.0
@@ -96,7 +94,6 @@ def _invalidate_cached_cases(runtime: Runtime) -> None:
 def create_app(runtime: Runtime | None = None) -> FastAPI:
     settings = runtime.settings if runtime else get_settings()
     runtime = runtime or build_runtime(settings)
-    secure_knowledge_publisher(runtime)
     app = FastAPI(title="ClassAll API", version="0.1.0")
     origins = [
         settings.dashboard_base_url.rstrip("/"),
@@ -886,35 +883,6 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             week = f"{year}-W{iso_wk:02d}"
         return runtime.knowledge_publisher.publish_weekly(week)
 
-    @app.get(
-        "/api/knowledge-base/preview/{filename}",
-        dependencies=[Depends(require_user)],
-    )
-    def preview_knowledge_base(filename: str) -> HTMLResponse:
-        clean_name = re.sub(r"[^a-zA-Z0-9_\-]", "", filename)
-        preview_uri = None
-        if clean_name.startswith("ClassAll_Assumptions_"):
-            iso_week = clean_name.removeprefix("ClassAll_Assumptions_")
-            record = runtime.repository.get_knowledge_base_week(iso_week)
-            preview_uri = (record or {}).get("preview_uri")
-        if not preview_uri:
-            raise HTTPException(404, "Preview document not found")
-        markdown = runtime.knowledge_publisher.blobs.download(preview_uri).decode(
-            "utf-8", errors="replace"
-        )
-        document = render_preview_document(markdown)
-        return HTMLResponse(
-            content=document,
-            headers={
-                "Content-Security-Policy": (
-                    "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; "
-                    "script-src 'none'; frame-ancestors 'none'; base-uri 'none'"
-                ),
-                "X-Content-Type-Options": "nosniff",
-                "Cache-Control": "private, no-store",
-            },
-        )
-
     @app.get("/api/integrations/gmail/oauth/start", dependencies=[Depends(require_admin)])
     def gmail_oauth_start() -> dict[str, str]:
         if not getattr(runtime.gmail, "is_configured", False):
@@ -956,10 +924,18 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         update: dict[str, Any],
         x_telegram_bot_api_secret_token: Annotated[str | None, Header()] = None,
     ) -> dict[str, bool]:
-        if not settings.telegram_webhook_secret or not hmac.compare_digest(
-            x_telegram_bot_api_secret_token or "", settings.telegram_webhook_secret
+        expected_secret = (settings.telegram_webhook_secret or "").strip()
+        received_token = (x_telegram_bot_api_secret_token or "").strip()
+        if not expected_secret or not hmac.compare_digest(
+            received_token, expected_secret
         ):
+            logger.warning(
+                "Telegram webhook rejected: secret mismatch (expected length: %d, received length: %d)",
+                len(expected_secret),
+                len(received_token),
+            )
             raise HTTPException(401, "invalid Telegram webhook secret")
+        logger.info("Processing Telegram webhook update: %s", update.get("update_id"))
         _handle_telegram_update(runtime, update)
         return {"ok": True}
 
@@ -992,6 +968,7 @@ def _process_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
     chat_id = str(message["chat"]["id"])
     text = (message.get("text") or message.get("caption") or "").strip()
     command = text.split(maxsplit=1)[0].split("@", 1)[0].lower() if text else ""
+    logger.info("Telegram message from chat_id %s: command='%s', text='%s'", chat_id, command, text[:60])
     runtime.telegram.send_chat_action(chat_id, "typing")
     if text.startswith("/start"):
         runtime.telegram.send_message(chat_id, TELEGRAM_WELCOME_TEXT)
