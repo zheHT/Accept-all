@@ -45,7 +45,7 @@ class CaseExplainer:
                 "between Shipping Instructions (SI) and draft Bills of Lading (BL).\n\n"
                 "• Send <code>/newcase</code> to generate a case token.\n"
                 "• Upload documents with caption <code>#TOKEN</code>, then send <code>/submit TOKEN</code>.\n"
-                "• Or ask a question about any case by mentioning its ID (e.g. <code>case-18e47...</code>)."
+                "• Or ask a question about any case by mentioning its ID (e.g. <code>case-gmail-67</code>)."
             )
         from google import genai
         from google.genai import types

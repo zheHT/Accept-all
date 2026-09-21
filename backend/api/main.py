@@ -1226,7 +1226,7 @@ def _process_telegram_update(runtime: Runtime, update: dict[str, Any]) -> None:
                 "I can help cross-check Shipping Instructions against draft Bills of Lading.\n\n"
                 "• Send <code>/newcase</code> to start a new document check.\n"
                 "• Upload documents with caption <code>#TOKEN</code>, then send <code>/submit TOKEN</code>.\n"
-                "• Or ask a question about an existing case by mentioning its ID (e.g. <code>case-18e47...</code>)."
+                "• Or ask a question about an existing case by mentioning its ID (e.g. <code>case-gmail-67</code>)."
             )
         try:
             runtime.telegram.edit_message_text(chat_id, progress.get("message_id", 0), answer)

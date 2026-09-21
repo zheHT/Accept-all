@@ -74,7 +74,7 @@ TELEGRAM_HELP_TEXT = (
     "• <b>DECLINE & DRAFT:</b> Generate a polite correction draft in Gmail\n"
     "• <b>MANUAL CHECK:</b> Direct link to the live web dashboard\n\n"
     "<b>Ask the AI:</b>\n"
-    "Mention any <code>case-&lt;id&gt;</code> (e.g. <code>case-18e47... why was this declined?</code>) "
+    "Mention any <code>case-&lt;id&gt;</code> (e.g. <code>case-gmail-67 why was this declined?</code>) "
     "to query the stored evidence using Gemini.\n\n"
     "<b>Operations:</b>\n"
     "• <code>/notifications</code> — Show alert and hourly email settings\n"
