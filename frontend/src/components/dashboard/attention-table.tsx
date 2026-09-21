@@ -138,7 +138,7 @@ export function AttentionTable() {
         ) : (
           <div className="flex flex-wrap gap-1">
             {record.flaggedFields.map((field) => (
-              <Tag key={field} bordered={false} color={record.status === "mismatch" ? "volcano" : "gold"}>
+              <Tag key={field} variant="filled" color={record.status === "mismatch" ? "volcano" : "gold"}>
                 {field}
               </Tag>
             ))}
