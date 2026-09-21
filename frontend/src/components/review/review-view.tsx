@@ -548,7 +548,11 @@ export function ReviewView() {
           size="small"
           icon={<SolutionOutlined />}
           onClick={() => openCase(item)}
-          style={{ backgroundColor: item.status === "resolved" ? "#52c41a" : "#faad14" }}
+          style={{
+            width: 100,
+            backgroundColor: item.status === "resolved" ? "#52c41a" : "#faad14",
+          }}
+          className="inline-flex items-center justify-center"
         >
           {item.status === "resolved" ? "View Case" : "Review"}
         </Button>
@@ -641,7 +645,7 @@ export function ReviewView() {
           columns={columns}
           dataSource={rows}
           pagination={{
-            pageSize: 10,
+            defaultPageSize: 10,
             showSizeChanger: true,
             pageSizeOptions: ["10", "25", "50"],
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} cases`,

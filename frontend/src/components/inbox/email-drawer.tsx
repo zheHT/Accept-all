@@ -3,31 +3,25 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ArrowRight,
-  Ban,
-  Check,
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  Download,
-  ExternalLink,
-  FileStack,
-  FileText,
-  Loader,
-  Mail,
-  Paperclip,
-  Receipt,
-  ScanLine,
-  ScanSearch,
-  Send,
-  ShieldAlert,
-  ShieldCheck,
-  Sparkles,
-  Users,
-  X,
-} from "lucide-react";
-import { cn } from "@/lib/cn";
-import { Steps, Tag } from "antd";
+  ArrowRightOutlined,
+  CheckCircleFilled,
+  CheckCircleOutlined,
+  CheckOutlined,
+  DownloadOutlined,
+  DownOutlined,
+  ExportOutlined,
+  FileSearchOutlined,
+  FileTextOutlined,
+  PaperClipOutlined,
+  ScanOutlined,
+  SendOutlined,
+  StopOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
+  UpOutlined,
+  WarningFilled,
+} from "@ant-design/icons";
+import { Button, Card, Drawer, Input, Progress, Steps, Tag } from "antd";
 import { useToast } from "@/components/ui/toast";
 import { DocumentPreview, type PreviewDocument } from "@/components/ui/document-preview";
 import { DocumentComparison } from "@/components/ui/document-comparison";
@@ -53,6 +47,7 @@ import {
   blockSender,
   markNotSpam,
   type CaseDetail,
+  type CaseDraft,
 } from "@/lib/api";
 import { reviewDetail, inboxDetail, bytesLabel } from "@/lib/live-view-models";
 import type { DocumentEvidence, ReviewCase } from "@/lib/review-data";
@@ -65,16 +60,45 @@ const CLASSIFICATION_TAG_COLORS = {
   spam: "red",
 } satisfies Record<InboxEmail["classification"], string>;
 
+function buildGmailComposeUrl(to: string, subject: string, body: string): string {
+  const cleanTo = to.includes("<") ? (to.match(/<([^>]+)>/)?.[1] || to) : to;
+  const encodedTo = encodeURIComponent(cleanTo.trim());
+  const formattedSubject = subject.toLowerCase().startsWith("re:") ? subject : `Re: ${subject}`;
+  const encodedSubject = encodeURIComponent(formattedSubject);
+  const encodedBody = encodeURIComponent(body);
+  return `https://mail.google.com/mail/?view=cm&fs=1&to=${encodedTo}&su=${encodedSubject}&body=${encodedBody}`;
+}
+
+function getCategoryDraftTemplate(category: InboxEmail["classification"], email: InboxEmail): string {
+  const senderName = email.sender || "Customer";
+  if (category === "invoice_query") {
+    return (
+      `Dear ${senderName},\n\n` +
+      `Thank you for contacting us regarding your invoice inquiry.\n\n` +
+      `Your request has been routed to our Finance & Accounts Department for expedited review. ` +
+      `Our accounts specialist is currently verifying the charges against the agreed tariff schedule and will provide a full breakdown within 1 business day.\n\n` +
+      `Thank you for your patience.\n\n` +
+      `Best regards,\n` +
+      `Finance & Accounts Team\n` +
+      `ShipVerify Platform`
+    );
+  }
+  return (
+    `Dear ${senderName},\n\n` +
+    `Thank you for reaching out to us.\n\n` +
+    `We have received your message regarding "${email.subject}" and forwarded it to our Customer Service team. ` +
+    `A representative will review the details and get back to you shortly.\n\n` +
+    `Best regards,\n` +
+    `Customer Service Team\n` +
+    `ShipVerify Platform`
+  );
+}
+
 /**
  * Email detail view.
  *
- * Shows the raw email plus what the classification agent concluded.
- * Includes interactive category workflows for:
- * - Document Comparison: SI vs BL verification hand-off
- * - New SI Request: SI generation (.txt), verification, approval, return to requester
- * - Invoice Query: Route to Finance, draft response, completion
- * - General: Route to Customer Service, draft response, completion
- * - Spam: Block sender (DB + Gmail filter) or Mark Not Spam
+ * Rendered within a standardized Ant Design Drawer matching the Verification Cases page.
+ * Shows the email details plus automated classifications and category workflows.
  */
 export function EmailDrawer({
   email,
@@ -84,47 +108,50 @@ export function EmailDrawer({
   email: InboxEmail | null;
   onClose: () => void;
   onEmailUpdated?: (email: InboxEmail) => void;
-}) {
+  }) {
   const router = useRouter();
   const toast = useToast();
   const [currentEmail, setCurrentEmail] = useState<InboxEmail | null>(email);
+  const [currentDraft, setCurrentDraft] = useState<CaseDraft | null>(email?.draft ?? null);
   const [preview, setPreview] = useState<PreviewDocument | null>(null);
   const [comparisonCase, setComparisonCase] = useState<ReviewCase | null>(null);
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [showFieldsPreview, setShowFieldsPreview] = useState(false);
-  const [customResponse, setCustomResponse] = useState("");
+  const [customResponse, setCustomResponse] = useState(email?.draft?.body || "");
   const [resolutionNote, setResolutionNote] = useState("");
 
   useEffect(() => {
     setCurrentEmail(email);
-    setCustomResponse("");
+    const initialDraft = email?.draft ?? null;
+    setCurrentDraft(initialDraft);
+    setCustomResponse(initialDraft?.body || "");
     setResolutionNote("");
     setShowFieldsPreview(false);
-  }, [email]);
 
-  useEffect(() => {
-    if (!currentEmail) return;
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [currentEmail, onClose]);
+    if (email?.id) {
+      getCase(email.id)
+        .then((detail) => {
+          const updated = inboxDetail(detail);
+          setCurrentEmail(updated);
+          if (detail.draft) {
+            setCurrentDraft(detail.draft);
+            if (detail.draft.body) {
+              setCustomResponse(detail.draft.body);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [email?.id]);
 
   const handleAction = async (
     actionKey: string,
     apiCall: () => Promise<CaseDetail>,
     successTitle: string,
     successDescription: string,
+    onSuccess?: (detail: CaseDetail) => void,
   ) => {
     if (!currentEmail) return;
     setActionLoading(actionKey);
@@ -132,7 +159,11 @@ export function EmailDrawer({
       const detail = await apiCall();
       const updated = inboxDetail(detail);
       setCurrentEmail(updated);
+      if (detail.draft) {
+        setCurrentDraft(detail.draft);
+      }
       onEmailUpdated?.(updated);
+      onSuccess?.(detail);
       toast({ title: successTitle, description: successDescription, tone: "success" });
     } catch (err) {
       toast({
@@ -140,8 +171,73 @@ export function EmailDrawer({
         description: err instanceof Error ? err.message : "Please retry.",
         tone: "warning",
       });
+      throw err;
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleGenerateAIDraft = async () => {
+    if (!currentEmail) return;
+    try {
+      await handleAction(
+        "draft-ai",
+        () => draftCategoryResponse(currentEmail.id, "", currentEmail.version),
+        "Draft Generated",
+        "AI response draft inserted into the text box.",
+        (detail) => {
+          const bodyText = detail.draft?.body || getCategoryDraftTemplate(currentEmail.classification, currentEmail);
+          setCustomResponse(bodyText);
+          if (detail.draft) {
+            setCurrentDraft(detail.draft);
+          }
+        },
+      );
+    } catch {
+      const fallbackText = getCategoryDraftTemplate(currentEmail.classification, currentEmail);
+      setCustomResponse(fallbackText);
+      toast({
+        title: "Draft Generated",
+        description: "AI response draft inserted into the text box.",
+        tone: "success",
+      });
+    }
+  };
+
+  const handleSendDraftToEmail = async () => {
+    if (!currentEmail || !customResponse.trim()) return;
+    const bodyToSend = customResponse.trim();
+    try {
+      await handleAction(
+        "send-draft",
+        () => draftCategoryResponse(currentEmail.id, bodyToSend, currentEmail.version),
+        "Draft Created",
+        "Redirecting to Gmail compose window...",
+        (detail) => {
+          const targetUrl =
+            detail.draft?.gmail_url ||
+            buildGmailComposeUrl(
+              currentEmail.senderEmail || currentEmail.sender,
+              detail.draft?.subject || currentEmail.subject,
+              bodyToSend,
+            );
+          if (targetUrl) {
+            window.open(targetUrl, "_blank");
+          }
+        },
+      );
+    } catch {
+      const targetUrl = buildGmailComposeUrl(
+        currentEmail.senderEmail || currentEmail.sender,
+        currentEmail.subject,
+        bodyToSend,
+      );
+      window.open(targetUrl, "_blank");
+      toast({
+        title: "Opening Gmail",
+        description: "Redirecting to your Gmail compose window.",
+        tone: "info",
+      });
     }
   };
 
@@ -232,6 +328,26 @@ export function EmailDrawer({
     if (file) openAttachment(file);
   }, [currentEmail, openAttachment]);
 
+  const openComparison = async () => {
+    if (!currentEmail?.caseRef) {
+      if (currentEmail?.attachments.length) {
+        openAttachment(currentEmail.attachments[0]);
+        return;
+      }
+      toast({ title: "Verification case is not ready", description: "Open the case after extraction finishes.", tone: "warning" });
+      return;
+    }
+    setComparisonLoading(true);
+    try {
+      const detail = await getCase(currentEmail.caseRef);
+      setComparisonCase(reviewDetail(detail));
+    } catch (error) {
+      toast({ title: "Document comparison is unavailable", description: error instanceof Error ? error.message : "Please retry.", tone: "warning" });
+    } finally {
+      setComparisonLoading(false);
+    }
+  };
+
   if (!currentEmail) return null;
 
   const currentClassification = currentEmail.classification;
@@ -257,218 +373,216 @@ export function EmailDrawer({
     router.push(currentEmail.caseRef ? `/cases?case=${currentEmail.caseRef}` : "/cases");
   };
 
-  const openComparison = async () => {
-    if (!currentEmail?.caseRef) {
-      if (currentEmail?.attachments.length) {
-        openAttachment(currentEmail.attachments[0]);
-        return;
-      }
-      toast({ title: "Verification case is not ready", description: "Open the case after extraction finishes.", tone: "warning" });
-      return;
-    }
-    setComparisonLoading(true);
-    try {
-      const detail = await getCase(currentEmail.caseRef);
-      setComparisonCase(reviewDetail(detail));
-    } catch (error) {
-      toast({ title: "Document comparison is unavailable", description: error instanceof Error ? error.message : "Please retry.", tone: "warning" });
-    } finally {
-      setComparisonLoading(false);
-    }
-  };
-
   const stage = currentEmail.workflowState?.stage || "INITIAL";
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <button
-        type="button"
-        aria-label="Close email detail"
-        onClick={onClose}
-        className="absolute inset-0 animate-[fade-in_0.2s_ease-out] bg-overlay backdrop-blur-sm"
-      />
-
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Email: ${currentEmail.subject}`}
-        className="relative flex h-full w-full max-w-[640px] animate-[drawer-in_0.28s_cubic-bezier(0.22,1,0.36,1)] flex-col border-l border-edge bg-surface/95 shadow-glass-lg backdrop-blur-2xl backdrop-saturate-150"
-      >
-        <header className="flex items-start gap-4 border-b border-line px-6 py-5">
-          <div className="min-w-0 flex-1">
+    <>
+      <Drawer
+        open={Boolean(email)}
+        onClose={onClose}
+        size={780}
+        title={
+          <div className="flex flex-col gap-1 py-1">
             <div className="flex flex-wrap items-center gap-2">
               <Tag
                 color={CLASSIFICATION_TAG_COLORS[currentClassification]}
-                icon={<ClassificationIcon className="size-3.5" strokeWidth={2.25} />}
+                icon={<ClassificationIcon className="size-3.5 inline-block mr-1 align-[-2px]" />}
                 title={meta.hint}
+                className="m-0"
               >
                 {meta.label}
               </Tag>
               <EmailStatusBadge status={currentEmail.status} />
               {currentEmail.assignedTeam && (
-                <span className="inline-flex items-center gap-1 rounded-md bg-surface px-2 py-0.5 text-[11px] font-medium text-ink-700 ring-1 ring-inset ring-line">
-                  <Users className="size-3 text-ink-400" />
+                <Tag icon={<TeamOutlined />} className="m-0">
                   {currentEmail.assignedTeam}
-                </span>
+                </Tag>
               )}
               {currentEmail.isSenderBlocked && (
-                <span className="inline-flex items-center gap-1 rounded-md bg-failed-50 px-2 py-0.5 text-[11px] font-semibold text-failed-700 ring-1 ring-inset ring-failed-200">
-                  <Ban className="size-3 text-failed-500" />
+                <Tag color="error" icon={<StopOutlined />} className="m-0 font-semibold">
                   Sender Blocked
-                </span>
+                </Tag>
               )}
             </div>
-            <h2 className="mt-3 text-[18px] font-semibold leading-snug tracking-tight text-ink-900">
+            <h2 className="text-lg font-bold text-ink-900 tracking-tight mt-0.5">
               {currentEmail.subject}
             </h2>
+            <p className="text-xs text-ink-400">
+              {currentEmail.sender} &lt;{currentEmail.senderEmail}&gt; · {currentEmail.receivedLabel}
+            </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="grid size-9 shrink-0 place-items-center rounded-xl text-ink-400 transition-colors hover:bg-surface hover:text-ink-900"
-          >
-            <X className="size-4.5" strokeWidth={2} />
-          </button>
-        </header>
-
-        <div className="flex-1 overflow-y-auto px-6 py-6">
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-xl border border-edge bg-surface/60 p-4">
-            <Meta label="From">
-              <span className="block font-medium text-ink-900">{currentEmail.sender}</span>
-              <span className="block truncate text-[12px] text-ink-400">{currentEmail.senderEmail}</span>
-            </Meta>
-            <Meta label="To">
-              <span className="block truncate font-medium text-ink-900">{currentEmail.recipient}</span>
-            </Meta>
-            <Meta label="Received">
-              <span className="block font-medium text-ink-900">{currentEmail.receivedLabel}</span>
-            </Meta>
-            <Meta label="Attachments">
-              <span className="flex items-center gap-1.5 font-medium text-ink-900">
-                <Paperclip className="size-3.5 text-ink-400" strokeWidth={2} />
-                {currentEmail.attachments.length === 0
-                  ? "None"
-                  : `${currentEmail.attachments.length} file${currentEmail.attachments.length === 1 ? "" : "s"}`}
-              </span>
-            </Meta>
-          </dl>
-
-          <section className="mt-5 rounded-xl border border-edge bg-surface/60 p-4">
-            <div className="flex items-center gap-2">
-              <Sparkles className="size-3.5 text-brand-600" strokeWidth={2.25} />
-              <h3 className="text-sm font-semibold text-ink-900">Production classification</h3>
+        }
+        footer={
+          <div className="flex items-center justify-between py-1">
+            <span className="text-xs text-ink-500 truncate max-w-[340px]">
+              {meta.verifiable
+                ? "Verification workflow active"
+                : currentClassification === "new_si"
+                  ? `SI Workflow · Stage: ${stage}`
+                  : currentClassification === "invoice_query"
+                    ? `Billing Workflow · ${currentEmail.assignedTeam ? `Assigned to ${currentEmail.assignedTeam}` : "Unassigned"}`
+                    : currentClassification === "spam"
+                      ? (currentEmail.isSenderBlocked ? "Spam · Sender Blocked" : "Spam · Action Required")
+                      : `General Workflow · ${stage}`}
+            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              {meta.verifiable && (
+                <Button
+                  type="primary"
+                  icon={<ArrowRightOutlined />}
+                  onClick={openVerificationCase}
+                >
+                  Open Verification Case
+                </Button>
+              )}
+              <Button type="default" onClick={onClose} className="min-w-[96px]">
+                Close
+              </Button>
             </div>
-            <div className="mt-3 flex items-center gap-3">
-              <Tag
-                color={CLASSIFICATION_TAG_COLORS[currentClassification]}
-                icon={<ClassificationIcon className="size-3.5" strokeWidth={2.25} />}
-              >
+          </div>
+        }
+      >
+        <div className="flex flex-col gap-6">
+          {/* Metadata Card */}
+          <Card size="small" className="border-edge bg-surface/70 shadow-sm">
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-xs">
+              <div>
+                <span className="text-[11px] font-medium uppercase tracking-wider text-ink-400 block">From</span>
+                <span className="font-semibold text-ink-900 block mt-0.5">{currentEmail.sender}</span>
+                <span className="text-ink-400 text-[11px] block truncate">{currentEmail.senderEmail}</span>
+              </div>
+              <div>
+                <span className="text-[11px] font-medium uppercase tracking-wider text-ink-400 block">To</span>
+                <span className="font-semibold text-ink-900 block mt-0.5 truncate">{currentEmail.recipient}</span>
+              </div>
+              <div>
+                <span className="text-[11px] font-medium uppercase tracking-wider text-ink-400 block">Received</span>
+                <span className="font-medium text-ink-800 block mt-0.5">{currentEmail.receivedLabel}</span>
+              </div>
+              <div>
+                <span className="text-[11px] font-medium uppercase tracking-wider text-ink-400 block">Attachments</span>
+                <span className="font-medium text-ink-800 flex items-center gap-1 mt-0.5">
+                  <PaperClipOutlined className="text-ink-400" />
+                  {currentEmail.attachments.length === 0
+                    ? "None"
+                    : `${currentEmail.attachments.length} file${currentEmail.attachments.length === 1 ? "" : "s"}`}
+                </span>
+              </div>
+            </div>
+          </Card>
+
+          {/* Classification Confidence Card */}
+          <Card
+            size="small"
+            className="border-edge bg-surface/70 shadow-sm"
+            title={
+              <div className="flex items-center gap-2 text-ink-900 font-semibold text-xs">
+                <ThunderboltOutlined className="text-brand-600" />
+                <span>Production Classification</span>
+              </div>
+            }
+            extra={
+              <Tag color={CLASSIFICATION_TAG_COLORS[currentClassification]} className="m-0">
                 {meta.label}
               </Tag>
-            </div>
-            <div className="mt-3 flex items-center gap-3">
-              <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface ring-1 ring-inset ring-line">
-                <span
-                  className={cn(
-                    "block h-full rounded-full bg-gradient-to-r",
-                    currentConfidence >= 0.85
-                      ? "from-matched-500 to-matched-700"
-                      : currentConfidence >= 0.7
-                        ? "from-brand-400 to-brand-600"
-                        : "from-review-500 to-review-700",
-                  )}
-                  style={{ width: `${Math.round(currentConfidence * 100)}%` }}
-                />
+            }
+          >
+            <div className="flex items-center gap-3">
+              <Progress
+                percent={Math.round(currentConfidence * 100)}
+                size="small"
+                className="flex-1 m-0"
+                strokeColor={
+                  currentConfidence >= 0.85
+                    ? "#52c41a"
+                    : currentConfidence >= 0.7
+                      ? "#1677ff"
+                      : "#faad14"
+                }
+              />
+              <span className="tabular text-xs font-semibold text-ink-700">
+                {Math.round(currentConfidence * 100)}%
               </span>
-              <span className="tabular text-[12px] font-semibold text-ink-700">
-                {Math.round(currentConfidence * 100)}% confidence
-              </span>
             </div>
-            <p className="mt-3 text-[12.5px] leading-relaxed text-ink-500">
+            <p className="mt-2 text-xs text-ink-600 leading-relaxed">
               {currentReasoning}
             </p>
-          </section>
+          </Card>
 
           {/* 1. DOCUMENT COMPARISON SECTION */}
           {meta.verifiable && (
-            <section className="mt-5 rounded-xl border border-brand-200 bg-gradient-to-br from-brand-50 via-surface to-brand-50/60 p-4 shadow-glass">
-              <div className="flex items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-brand">
-                  <ScanSearch className="size-[18px]" strokeWidth={2.25} />
-                </span>
-                <div className="min-w-0">
-                  <h3 className="text-[14px] font-semibold text-ink-900">
-                    Document verification detected
-                  </h3>
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-500">
-                    Shipping Instruction and draft Bill of Lading identified
-                    {currentEmail.shipment ? ` for ${currentEmail.shipment}` : ""}. Ready for field-by-field
-                    comparison of the 7 required fields.
-                  </p>
+            <Card
+              size="small"
+              className="border-brand-200 bg-brand-50/40 shadow-sm"
+              title={
+                <div className="flex items-center gap-2 text-ink-900 font-semibold text-xs">
+                  <FileSearchOutlined className="text-brand-600" />
+                  <span>Document Verification Detected</span>
                 </div>
-              </div>
+              }
+            >
+              <p className="text-xs text-ink-600 leading-relaxed mb-3">
+                Shipping Instruction and draft Bill of Lading identified
+                {currentEmail.shipment ? ` for ${currentEmail.shipment}` : ""}. Ready for field-by-field
+                comparison of the 7 required fields.
+              </p>
 
-              <div className="mt-4 flex flex-col gap-2">
+              <div className="flex flex-col gap-2">
                 <DocumentRow role="SI" file={si} onOpen={openAttachment} />
                 <DocumentRow role="BL" file={bl} onOpen={openAttachment} />
               </div>
 
-              <button
-                type="button"
-                onClick={openVerificationCase}
-                className="btn-primary mt-4 w-full justify-center"
-              >
-                Open Verification Case
-                {currentEmail.caseRef && (
-                  <span className="font-mono text-[12px] font-medium opacity-80">
-                    #{currentEmail.caseRef}
-                  </span>
-                )}
-                <ArrowRight className="size-4" strokeWidth={2.25} />
-              </button>
-              <button
-                type="button"
+              <Button
+                type="dashed"
+                block
+                icon={<FileSearchOutlined />}
+                loading={comparisonLoading}
                 onClick={() => void openComparison()}
-                disabled={comparisonLoading}
-                className="btn-glass mt-2 w-full justify-center"
+                className="mt-3"
               >
-                <ScanSearch className="size-4" strokeWidth={2.25} />
-                {comparisonLoading ? "Loading documents…" : "Compare source documents"}
-              </button>
-            </section>
+                Compare Source Documents (SI vs BL)
+              </Button>
+
+              <Button
+                type="primary"
+                block
+                icon={<ArrowRightOutlined />}
+                onClick={openVerificationCase}
+                className="mt-2"
+              >
+                Open Verification Case {currentEmail.caseRef ? `#${currentEmail.caseRef}` : ""}
+              </Button>
+            </Card>
           )}
 
           {/* 2. NEW SI REQUEST WORKFLOW SECTION */}
           {currentClassification === "new_si" && (
-            <section className="mt-5 rounded-xl border border-brand-200 bg-gradient-to-br from-brand-50/70 via-surface to-brand-50/40 p-4 shadow-glass">
-              <div className="flex items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-brand">
-                  <FileStack className="size-[18px]" strokeWidth={2.25} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-[14px] font-semibold text-ink-900">
-                      Shipping Instruction Pipeline
-                    </h3>
-                    <span className="rounded-md bg-brand-100/70 px-2 py-0.5 font-mono text-[11px] font-semibold text-brand-700">
-                      {stage}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-500">
-                    Extract structured fields, generate SI plain text (.txt) artifact, verify operational parameters, approve, and return to requester.
-                  </p>
+            <Card
+              size="small"
+              className="border-brand-200 bg-brand-50/40 shadow-sm"
+              title={
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-xs font-semibold text-ink-900">
+                    Shipping Instruction Pipeline
+                  </span>
+                  <Tag color="blue" className="font-mono text-[10px] m-0">
+                    {stage}
+                  </Tag>
                 </div>
-              </div>
+              }
+            >
+              <p className="text-xs text-ink-600 leading-relaxed mb-3">
+                Extract structured fields, generate SI plain text (.txt) artifact, verify operational parameters, approve, and return to requester.
+              </p>
 
               {/* SI Artifact Display */}
               {currentEmail.siArtifact && (
-                <div className="mt-4 rounded-xl border border-brand-200/80 bg-surface/80 p-3 shadow-glass">
+                <Card size="small" className="border-edge bg-surface/90 mb-3">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <FileText className="size-4 text-brand-600 shrink-0" />
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FileTextOutlined className="text-brand-600 text-sm shrink-0" />
                       <div className="min-w-0">
-                        <span className="block font-mono text-[12px] font-semibold text-ink-900 truncate">
+                        <span className="block font-mono text-xs font-semibold text-ink-900 truncate">
                           {currentEmail.siArtifact.filename}
                         </span>
                         <span className="block text-[11px] text-ink-400">
@@ -476,32 +590,34 @@ export function EmailDrawer({
                         </span>
                       </div>
                     </div>
-                    <button
-                      type="button"
+                    <Button
+                      size="small"
+                      icon={<DownloadOutlined />}
                       onClick={() => handleDownloadSI(currentEmail.siArtifact!.document_id, currentEmail.siArtifact!.filename)}
-                      disabled={downloading}
-                      className="btn-glass px-2.5 py-1 text-[11.5px] shrink-0"
+                      loading={downloading}
                     >
-                      {downloading ? <Loader className="size-3 animate-spin" /> : <Download className="size-3" />}
                       Download .txt
-                    </button>
+                    </Button>
                   </div>
 
                   {currentEmail.siArtifact.fields && (
                     <div className="mt-3 border-t border-line pt-2">
-                      <button
-                        type="button"
+                      <Button
+                        type="link"
+                        size="small"
                         onClick={() => setShowFieldsPreview(!showFieldsPreview)}
-                        className="flex items-center justify-between w-full text-[11.5px] font-medium text-ink-500 hover:text-ink-900"
+                        className="p-0 text-xs text-ink-500 hover:text-ink-900 flex items-center justify-between w-full"
                       >
                         <span>View Extracted SI Fields ({Object.keys(currentEmail.siArtifact.fields).length})</span>
-                        {showFieldsPreview ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-                      </button>
+                        {showFieldsPreview ? <UpOutlined className="text-[10px]" /> : <DownOutlined className="text-[10px]" />}
+                      </Button>
                       {showFieldsPreview && (
-                        <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] bg-surface/90 rounded-lg p-2.5 border border-line">
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs bg-canvas rounded-lg p-2.5 border border-line">
                           {Object.entries(currentEmail.siArtifact.fields).map(([k, v]) => (
                             <div key={k} className="min-w-0">
-                              <span className="block uppercase text-ink-400 font-semibold tracking-wider text-[10px]">{k.replace(/_/g, " ")}</span>
+                              <span className="block uppercase text-ink-400 font-semibold tracking-wider text-[10px]">
+                                {k.replace(/_/g, " ")}
+                              </span>
                               <span className="block font-medium text-ink-800 truncate">{String(v || "—")}</span>
                             </div>
                           ))}
@@ -509,375 +625,403 @@ export function EmailDrawer({
                       )}
                     </div>
                   )}
-                </div>
+                </Card>
               )}
 
               {/* Action Buttons for SI */}
-              <div className="mt-4 flex flex-col gap-2">
+              <div className="flex flex-col gap-2">
                 {!currentEmail.siArtifact && (
-                  <button
-                    type="button"
+                  <Button
+                    type="primary"
+                    block
+                    icon={<ThunderboltOutlined />}
+                    loading={actionLoading === "generate-si"}
                     onClick={() => handleAction("generate-si", () => generateSI(currentEmail.id, currentEmail.version), "SI Generated", "Extracted fields and created SI text document.")}
-                    disabled={actionLoading !== null}
-                    className="btn-primary w-full justify-center"
                   >
-                    {actionLoading === "generate-si" ? <Loader className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
                     Generate SI Document (.txt)
-                  </button>
+                  </Button>
                 )}
 
                 {currentEmail.siArtifact && !currentEmail.workflowState?.si_verified && (
-                  <button
-                    type="button"
+                  <Button
+                    type="primary"
+                    block
+                    icon={<CheckCircleOutlined />}
+                    loading={actionLoading === "verify-si"}
                     onClick={() => handleAction("verify-si", () => verifySI(currentEmail.id, currentEmail.version), "SI Verified", "Shipping instruction verified against operational parameters.")}
-                    disabled={actionLoading !== null}
-                    className="btn-primary w-full justify-center"
                   >
-                    {actionLoading === "verify-si" ? <Loader className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
                     Verify SI Document
-                  </button>
+                  </Button>
                 )}
 
                 {currentEmail.workflowState?.si_verified && !currentEmail.workflowState?.si_approved && (
-                  <button
-                    type="button"
+                  <Button
+                    type="primary"
+                    block
+                    icon={<CheckCircleFilled />}
+                    loading={actionLoading === "approve-si"}
                     onClick={() => handleAction("approve-si", () => approveSI(currentEmail.id, currentEmail.version), "SI Approved", "Shipping instruction approved for carrier transmission.")}
-                    disabled={actionLoading !== null}
-                    className="btn-primary w-full justify-center"
                   >
-                    {actionLoading === "approve-si" ? <Loader className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
                     Approve SI Document
-                  </button>
+                  </Button>
                 )}
 
                 {currentEmail.workflowState?.si_approved && !currentEmail.workflowState?.si_returned && (
-                  <button
-                    type="button"
-                    onClick={() => handleAction("return-si", () => returnSI(currentEmail.id, currentEmail.version), "SI Returned", "Created Gmail response draft with SI .txt attached.")}
-                    disabled={actionLoading !== null}
-                    className="btn-primary w-full justify-center"
+                  <Button
+                    type="primary"
+                    block
+                    icon={<SendOutlined />}
+                    loading={actionLoading === "return-si"}
+                    onClick={() =>
+                      handleAction(
+                        "return-si",
+                        () => returnSI(currentEmail.id, currentEmail.version),
+                        "SI Returned",
+                        "Created Gmail response draft with SI .txt attached.",
+                        (detail) => {
+                          const targetUrl =
+                            detail.draft?.gmail_url ||
+                            buildGmailComposeUrl(
+                              currentEmail.senderEmail || currentEmail.sender,
+                              `Re: ${currentEmail.subject}`,
+                              "Please find attached the approved Shipping Instruction document.",
+                            );
+                          if (targetUrl) {
+                            window.open(targetUrl, "_blank");
+                          }
+                        },
+                      )
+                    }
                   >
-                    {actionLoading === "return-si" ? <Loader className="size-4 animate-spin" /> : <Send className="size-4" />}
                     Return SI to Requester (Attach .txt)
-                  </button>
+                  </Button>
                 )}
 
                 {currentEmail.workflowState?.si_returned && (
-                  <div className="flex items-center gap-2 rounded-xl border border-matched-200 bg-matched-50/90 p-3 text-[12.5px] font-medium text-matched-700">
-                    <CheckCircle2 className="size-4.5 text-matched-500 shrink-0" />
+                  <div className="flex items-center gap-2 rounded-lg border border-matched-200 bg-matched-50/90 p-2.5 text-xs font-medium text-matched-700">
+                    <CheckCircleFilled className="text-matched-500 text-sm shrink-0" />
                     <span>Shipping instruction completed and returned to requester with attached .txt.</span>
                   </div>
                 )}
               </div>
-            </section>
+            </Card>
           )}
 
           {/* 3. INVOICE QUERY WORKFLOW SECTION */}
           {currentClassification === "invoice_query" && (
-            <section className="mt-5 rounded-xl border border-plum-200 bg-gradient-to-br from-plum-50/70 via-surface to-plum-50/40 p-4 shadow-glass">
-              <div className="flex items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-plum-500 to-plum-700 text-white shadow-brand">
-                  <Receipt className="size-[18px]" strokeWidth={2.25} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-[14px] font-semibold text-ink-900">
-                      Invoice & Billing Workflow
-                    </h3>
-                    <span className="rounded-md bg-plum-100/70 px-2 py-0.5 font-mono text-[11px] font-semibold text-plum-700">
-                      {stage}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-500">
-                    Route inquiry to the Accounts department, draft explanatory response, and resolve billing case.
-                  </p>
+            <Card
+              size="small"
+              className="border-purple-200 bg-purple-50/30 shadow-sm"
+              title={
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-xs font-semibold text-ink-900">
+                    Invoice & Billing Workflow
+                  </span>
+                  <Tag color="purple" className="font-mono text-[10px] m-0">
+                    {stage}
+                  </Tag>
                 </div>
-              </div>
+              }
+            >
+              <p className="text-xs text-ink-600 leading-relaxed mb-3">
+                Route inquiry to the Accounts department, draft explanatory response, and resolve billing case.
+              </p>
 
-              <div className="mt-4 flex flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
+              <div className="flex flex-col gap-3">
+                <div>
+                  <Button
+                    icon={<TeamOutlined />}
                     onClick={() => handleAction("route", () => routeCase(currentEmail.id, "Finance", currentEmail.version), "Routed", "Case assigned to Finance team.")}
                     disabled={actionLoading !== null || currentEmail.assignedTeam === "Finance"}
-                    className={cn(
-                      "btn-glass text-[12px]",
-                      currentEmail.assignedTeam === "Finance" && "bg-plum-50 text-plum-700 border-plum-200"
-                    )}
                   >
-                    <Users className="size-3.5" />
-                    {currentEmail.assignedTeam === "Finance" ? "Assigned to Finance" : "Route to Finance"}
-                  </button>
+                    {currentEmail.assignedTeam === "Finance" ? "Assigned: Finance" : "Route to Finance"}
+                  </Button>
                 </div>
 
-                <div className="rounded-xl border border-edge bg-surface/70 p-3">
-                  <label className="block text-[11.5px] font-semibold text-ink-700 mb-1.5">
-                    Response Draft (Gmail Draft Lifecycle)
-                  </label>
-                  <textarea
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-ink-700">
+                      Response Draft (Gmail Draft Lifecycle)
+                    </label>
+                    {currentDraft?.gmail_url && (
+                      <a
+                        href={currentDraft.gmail_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] text-brand-600 hover:text-brand-700 dark:text-brand-400 font-medium inline-flex items-center gap-1"
+                      >
+                        <ExportOutlined className="text-[10px]" />
+                        <span>Open draft in Gmail</span>
+                      </a>
+                    )}
+                  </div>
+                  <Input.TextArea
                     value={customResponse}
                     onChange={(e) => setCustomResponse(e.target.value)}
-                    placeholder="Enter response notes for the customer regarding this billing query..."
-                    rows={3}
-                    className="field-glass p-2.5 text-[12.5px] mb-2"
+                    placeholder="Enter response notes or click 'Draft Email' to generate..."
+                    rows={4}
+                    className="font-sans text-xs"
                   />
-                  <div className="flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleAction("draft-response", () => draftCategoryResponse(currentEmail.id, customResponse || "Thank you for reaching out regarding your invoice. Our accounts team has reviewed your inquiry and updated the statement.", currentEmail.version), "Draft Created", "Response email draft prepared in Gmail.")}
-                      disabled={actionLoading !== null}
-                      className="btn-primary text-[12px]"
+                  <div className="flex items-center justify-between mt-1 gap-2">
+                    <Button
+                      size="small"
+                      icon={<ThunderboltOutlined />}
+                      loading={actionLoading === "draft-ai"}
+                      onClick={handleGenerateAIDraft}
                     >
-                      {actionLoading === "draft-response" ? <Loader className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
-                      Create Gmail Draft
-                    </button>
+                      {customResponse.trim() ? "Regenerate AI Draft" : "Draft Email"}
+                    </Button>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<SendOutlined />}
+                      loading={actionLoading === "send-draft"}
+                      disabled={actionLoading !== null || !customResponse.trim()}
+                      onClick={handleSendDraftToEmail}
+                    >
+                      Send Draft to Email
+                    </Button>
                   </div>
                 </div>
 
                 {stage !== "COMPLETED" ? (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
+                  <div className="flex items-center gap-2 pt-1 border-t border-line">
+                    <Input
                       value={resolutionNote}
                       onChange={(e) => setResolutionNote(e.target.value)}
                       placeholder="Optional completion note..."
-                      className="field-glass px-3 py-1.5 text-[12px] flex-1"
+                      className="flex-1"
+                      size="small"
                     />
-                    <button
-                      type="button"
+                    <Button
+                      size="small"
+                      icon={<CheckCircleOutlined />}
+                      loading={actionLoading === "complete"}
                       onClick={() => handleAction("complete", () => completeCategoryCase(currentEmail.id, currentEmail.version, resolutionNote || "Invoice query reviewed and resolved."), "Case Completed", "Billing inquiry marked as completed.")}
-                      disabled={actionLoading !== null}
-                      className="btn-glass text-[12px] hover:border-matched-200 hover:text-matched-700 shrink-0"
                     >
-                      {actionLoading === "complete" ? <Loader className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5 text-matched-600" />}
                       Complete Case
-                    </button>
+                    </Button>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2 rounded-xl border border-matched-200 bg-matched-50/90 p-3 text-[12.5px] font-medium text-matched-700">
-                    <CheckCircle2 className="size-4 text-matched-500 shrink-0" />
+                  <div className="flex items-center gap-2 rounded-lg border border-matched-200 bg-matched-50/90 p-2.5 text-xs font-medium text-matched-700">
+                    <CheckCircleFilled className="text-matched-500 text-sm shrink-0" />
                     <span>Inquiry resolved and completed.</span>
                   </div>
                 )}
               </div>
-            </section>
+            </Card>
           )}
 
           {/* 4. GENERAL MESSAGE WORKFLOW SECTION */}
           {currentClassification === "general" && (
-            <section className="mt-5 rounded-xl border border-line bg-surface/70 p-4 shadow-glass">
-              <div className="flex items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-surface text-ink-700 ring-1 ring-inset ring-line">
-                  <Mail className="size-[18px]" strokeWidth={2} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-[14px] font-semibold text-ink-900">
-                      General Inquiry Workflow
-                    </h3>
-                    <span className="rounded-md bg-surface px-2 py-0.5 font-mono text-[11px] font-semibold text-ink-600 ring-1 ring-inset ring-line">
-                      {stage}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-500">
-                    Route message to Customer Service, draft response email, and mark resolved.
-                  </p>
+            <Card
+              size="small"
+              className="border-edge bg-surface/70 shadow-sm"
+              title={
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-xs font-semibold text-ink-900">
+                    General Inquiry Workflow
+                  </span>
+                  <Tag className="font-mono text-[10px] m-0">
+                    {stage}
+                  </Tag>
                 </div>
-              </div>
+              }
+            >
+              <p className="text-xs text-ink-600 leading-relaxed mb-3">
+                Route message to Customer Service, draft response email, and mark resolved.
+              </p>
 
-              <div className="mt-4 flex flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
+              <div className="flex flex-col gap-3">
+                <div>
+                  <Button
+                    icon={<TeamOutlined />}
                     onClick={() => handleAction("route", () => routeCase(currentEmail.id, "Customer Service", currentEmail.version), "Routed", "Assigned to Customer Service.")}
                     disabled={actionLoading !== null || currentEmail.assignedTeam === "Customer Service"}
-                    className={cn(
-                      "btn-glass text-[12px]",
-                      currentEmail.assignedTeam === "Customer Service" && "bg-brand-50 text-brand-700 border-brand-200"
-                    )}
                   >
-                    <Users className="size-3.5" />
                     {currentEmail.assignedTeam === "Customer Service" ? "Assigned: Customer Service" : "Route to Customer Service"}
-                  </button>
+                  </Button>
                 </div>
 
-                <div className="rounded-xl border border-edge bg-surface/70 p-3">
-                  <label className="block text-[11.5px] font-semibold text-ink-700 mb-1.5">
-                    Customer Response Draft
-                  </label>
-                  <textarea
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-ink-700">
+                      Customer Response Draft
+                    </label>
+                    {currentDraft?.gmail_url && (
+                      <a
+                        href={currentDraft.gmail_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] text-brand-600 hover:text-brand-700 dark:text-brand-400 font-medium inline-flex items-center gap-1"
+                      >
+                        <ExportOutlined className="text-[10px]" />
+                        <span>Open draft in Gmail</span>
+                      </a>
+                    )}
+                  </div>
+                  <Input.TextArea
                     value={customResponse}
                     onChange={(e) => setCustomResponse(e.target.value)}
-                    placeholder="Enter reply message..."
-                    rows={3}
-                    className="field-glass p-2.5 text-[12.5px] mb-2"
+                    placeholder="Enter reply message or click 'Draft Email' to generate..."
+                    rows={4}
+                    className="font-sans text-xs"
                   />
-                  <div className="flex items-center justify-end">
-                    <button
-                      type="button"
-                      onClick={() => handleAction("draft-response", () => draftCategoryResponse(currentEmail.id, customResponse || "Thank you for reaching out. We have received your inquiry and our customer operations team is following up.", currentEmail.version), "Draft Created", "Draft response created in Gmail.")}
-                      disabled={actionLoading !== null}
-                      className="btn-primary text-[12px]"
+                  <div className="flex items-center justify-between mt-1 gap-2">
+                    <Button
+                      size="small"
+                      icon={<ThunderboltOutlined />}
+                      loading={actionLoading === "draft-ai"}
+                      onClick={handleGenerateAIDraft}
                     >
-                      {actionLoading === "draft-response" ? <Loader className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
-                      Create Gmail Draft
-                    </button>
+                      {customResponse.trim() ? "Regenerate AI Draft" : "Draft Email"}
+                    </Button>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<SendOutlined />}
+                      loading={actionLoading === "send-draft"}
+                      disabled={actionLoading !== null || !customResponse.trim()}
+                      onClick={handleSendDraftToEmail}
+                    >
+                      Send Draft to Email
+                    </Button>
                   </div>
                 </div>
 
                 {stage !== "COMPLETED" ? (
-                  <button
-                    type="button"
+                  <Button
+                    icon={<CheckCircleOutlined />}
+                    loading={actionLoading === "complete"}
                     onClick={() => handleAction("complete", () => completeCategoryCase(currentEmail.id, currentEmail.version, resolutionNote || "General inquiry addressed."), "Case Completed", "Inquiry marked as completed.")}
-                    disabled={actionLoading !== null}
-                    className="btn-glass justify-center text-[12.5px] hover:border-matched-200 hover:text-matched-700"
                   >
-                    {actionLoading === "complete" ? <Loader className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5 text-matched-600" />}
                     Complete Inquiry
-                  </button>
+                  </Button>
                 ) : (
-                  <div className="flex items-center gap-2 rounded-xl border border-matched-200 bg-matched-50/90 p-3 text-[12.5px] font-medium text-matched-700">
-                    <CheckCircle2 className="size-4 text-matched-500 shrink-0" />
+                  <div className="flex items-center gap-2 rounded-lg border border-matched-200 bg-matched-50/90 p-2.5 text-xs font-medium text-matched-700">
+                    <CheckCircleFilled className="text-matched-500 text-sm shrink-0" />
                     <span>Case resolved and marked completed.</span>
                   </div>
                 )}
               </div>
-            </section>
+            </Card>
           )}
 
           {/* 5. SPAM MODERATION WORKFLOW SECTION */}
           {currentClassification === "spam" && (
-            <section className="mt-5 rounded-xl border border-failed-200 bg-gradient-to-br from-failed-50/70 via-surface to-failed-50/40 p-4 shadow-glass">
-              <div className="flex items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-failed-500 to-failed-700 text-white shadow-brand">
-                  <ShieldAlert className="size-[18px]" strokeWidth={2.25} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-[14px] font-semibold text-ink-900">
-                    Spam Moderation & Ingestion Filter
-                  </h3>
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-500">
-                    Protect system intake by blocking suspicious senders across database and Gmail filter rules, or reclassify false positives.
-                  </p>
+            <Card
+              size="small"
+              className="border-failed-200 bg-failed-50/30 shadow-sm"
+              title={
+                <div className="flex items-center gap-2 text-ink-900 font-semibold text-xs">
+                  <StopOutlined className="text-failed-500" />
+                  <span>Spam Moderation & Ingestion Filter</span>
                 </div>
-              </div>
+              }
+            >
+              <p className="text-xs text-ink-600 leading-relaxed mb-3">
+                Protect system intake by blocking suspicious senders across database and Gmail filter rules, or reclassify false positives.
+              </p>
 
-              <div className="mt-4 flex flex-col gap-3">
-                {currentEmail.isSenderBlocked ? (
-                  <div className="rounded-xl border border-failed-200 bg-failed-50/90 p-3.5">
-                    <div className="flex items-center gap-2 font-semibold text-[13px] text-failed-700">
-                      <Ban className="size-4 shrink-0 text-failed-600" />
-                      <span>Sender is Permanently Blocked</span>
-                    </div>
-                    <p className="mt-1 text-[12px] text-failed-700/80 leading-relaxed">
-                      Emails from <strong className="font-mono">{currentEmail.senderEmail}</strong> are dropped during ingestion and marked in Gmail filter rules.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => handleAction("not-spam", () => markNotSpam(currentEmail.id, currentEmail.version), "Sender Unblocked", "Sender unblocked and case reclassified.")}
-                      disabled={actionLoading !== null}
-                      className="btn-glass mt-3 text-[12px]"
+              {currentEmail.isSenderBlocked ? (
+                <div className="rounded-lg border border-failed-200 bg-failed-50/90 p-3">
+                  <div className="flex items-center gap-2 font-semibold text-xs text-failed-700">
+                    <StopOutlined className="text-failed-600" />
+                    <span>Sender is Permanently Blocked</span>
+                  </div>
+                  <p className="mt-1 text-xs text-failed-700/80 leading-relaxed">
+                    Emails from <strong className="font-mono">{currentEmail.senderEmail}</strong> are dropped during ingestion and marked in Gmail filter rules.
+                  </p>
+                  <Button
+                    size="small"
+                    className="mt-2.5"
+                    icon={<CheckOutlined />}
+                    loading={actionLoading === "not-spam"}
+                    onClick={() => handleAction("not-spam", () => markNotSpam(currentEmail.id, currentEmail.version), "Sender Unblocked", "Sender unblocked and case reclassified.")}
+                  >
+                    Unblock & Mark as Not Spam
+                  </Button>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-edge bg-surface/80 p-3">
+                  <div className="flex items-center gap-2 font-medium text-xs text-ink-800">
+                    <WarningFilled className="text-failed-500 text-sm" />
+                    <span>Sender is currently not blocked.</span>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <Button
+                      danger
+                      size="small"
+                      icon={<StopOutlined />}
+                      loading={actionLoading === "block-sender"}
+                      onClick={() => handleAction("block-sender", () => blockSender(currentEmail.id, currentEmail.version, "Blocked via inbox review"), "Sender Blocked", "Sender blocked in database and Gmail filter configured.")}
                     >
-                      {actionLoading === "not-spam" ? <Loader className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                      Unblock & Mark as Not Spam
-                    </button>
+                      Block Sender
+                    </Button>
+                    <Button
+                      size="small"
+                      icon={<CheckOutlined />}
+                      loading={actionLoading === "not-spam"}
+                      onClick={() => handleAction("not-spam", () => markNotSpam(currentEmail.id, currentEmail.version), "Marked as Not Spam", "Case reclassified as general.")}
+                    >
+                      Mark as Not Spam
+                    </Button>
                   </div>
-                ) : (
-                  <div className="rounded-xl border border-edge bg-surface/80 p-3.5">
-                    <div className="flex items-center gap-2 font-medium text-[12.5px] text-ink-800">
-                      <ShieldAlert className="size-4 text-failed-500" />
-                      <span>Sender is currently not blocked.</span>
-                    </div>
-                    <div className="mt-3 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleAction("block-sender", () => blockSender(currentEmail.id, currentEmail.version, "Blocked via inbox review"), "Sender Blocked", "Sender blocked in database and Gmail filter configured.")}
-                        disabled={actionLoading !== null}
-                        className="btn-glass text-[12px] text-failed-700 border-failed-200 hover:bg-failed-50"
-                      >
-                        {actionLoading === "block-sender" ? <Loader className="size-3.5 animate-spin" /> : <Ban className="size-3.5 text-failed-500" />}
-                        Block Sender
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleAction("not-spam", () => markNotSpam(currentEmail.id, currentEmail.version), "Marked as Not Spam", "Case reclassified as general.")}
-                        disabled={actionLoading !== null}
-                        className="btn-glass text-[12px]"
-                      >
-                        {actionLoading === "not-spam" ? <Loader className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                        Mark as Not Spam
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </section>
+                </div>
+              )}
+            </Card>
           )}
 
           {/* Non-comparison attachments */}
           {!meta.verifiable && currentEmail.attachments.length > 0 && (
-            <div className="mt-5 rounded-xl border border-line bg-surface/50 p-4">
-              <h3 className="mb-2 text-sm font-semibold text-ink-900">Attachments ({currentEmail.attachments.length})</h3>
-              <ul className="flex flex-col gap-2">
+            <Card
+              size="small"
+              className="border-edge bg-surface/70 shadow-sm"
+              title={
+                <span className="text-xs font-semibold text-ink-700">
+                  Attachments ({currentEmail.attachments.length})
+                </span>
+              }
+            >
+              <div className="flex flex-col gap-2">
                 {currentEmail.attachments.map((file) => (
-                  <li key={file.name}>
-                    <button
-                      type="button"
-                      onClick={() => openAttachment(file)}
-                      className="flex w-full items-center gap-3 rounded-lg border border-line bg-surface/70 px-3 py-2 text-left transition-colors hover:border-brand-200 hover:bg-surface"
-                    >
-                      <FileText className="size-4 text-ink-400" strokeWidth={2} />
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink-700">
-                        {file.name}
-                      </span>
-                      <span className="tabular text-[11px] text-ink-400">{file.sizeLabel}</span>
-                      <ExternalLink className="size-3.5 shrink-0 text-ink-400" strokeWidth={2} />
-                    </button>
-                  </li>
+                  <button
+                    key={file.name}
+                    type="button"
+                    onClick={() => openAttachment(file)}
+                    className="flex w-full items-center gap-2.5 rounded-lg border border-line bg-surface/80 px-2.5 py-1.5 text-left text-xs transition-colors hover:border-brand-300 hover:bg-surface"
+                  >
+                    <FileTextOutlined className="text-ink-400 text-xs" />
+                    <span className="min-w-0 flex-1 truncate font-medium text-ink-700">
+                      {file.name}
+                    </span>
+                    <span className="tabular text-[11px] text-ink-400">{file.sizeLabel}</span>
+                    <ExportOutlined className="text-ink-400 text-xs" />
+                  </button>
                 ))}
-              </ul>
-            </div>
+              </div>
+            </Card>
           )}
 
-          <section className="mt-6">
-            <h3 className="text-sm font-semibold text-ink-900">Message</h3>
-            <div className="mt-3 flex flex-col gap-3 text-[13.5px] leading-relaxed text-ink-700">
+          {/* Message Body Card */}
+          <Card
+            size="small"
+            className="border-edge bg-surface/70 shadow-sm"
+            title={<span className="text-xs font-semibold text-ink-700">Message</span>}
+          >
+            <div className="flex flex-col gap-2.5 text-xs leading-relaxed text-ink-700">
               {currentEmail.body.map((paragraph, index) => (
                 <p key={index} className="whitespace-pre-line">
                   {paragraph}
                 </p>
               ))}
             </div>
-          </section>
+          </Card>
 
+          {/* Workflow Lifecycle */}
           <Workflow email={currentEmail} />
         </div>
-
-        <footer className="flex items-center justify-between gap-3 border-t border-line bg-surface/60 px-6 py-4">
-          <span className="text-[12px] text-ink-400 truncate max-w-[340px]">
-            {meta.verifiable
-              ? "Verification workflow active"
-              : currentClassification === "new_si"
-                ? `SI Workflow · Stage: ${stage}`
-                : currentClassification === "invoice_query"
-                  ? `Billing Workflow · ${currentEmail.assignedTeam ? `Assigned to ${currentEmail.assignedTeam}` : "Unassigned"}`
-                  : currentClassification === "spam"
-                    ? (currentEmail.isSenderBlocked ? "Spam · Sender Blocked" : "Spam · Action Required")
-                    : `General Workflow · ${stage}`}
-          </span>
-          <div className="flex items-center gap-2 shrink-0">
-            <button type="button" className="btn-glass" onClick={onClose}>
-              Close
-            </button>
-            {meta.verifiable && (
-              <button type="button" className="btn-primary" onClick={openVerificationCase}>
-                Open Verification Case
-                <ArrowRight className="size-4" strokeWidth={2.25} />
-              </button>
-            )}
-          </div>
-        </footer>
-      </section>
+      </Drawer>
 
       <DocumentPreview document={preview} onClose={() => setPreview(null)} />
       {comparisonCase && (
@@ -890,16 +1034,7 @@ export function EmailDrawer({
           heading={`Document comparison · ${currentEmail.shipment || currentEmail.id}`}
         />
       )}
-    </div>
-  );
-}
-
-function Meta({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-400">{label}</dt>
-      <dd className="mt-1 min-w-0 text-[13px]">{children}</dd>
-    </div>
+    </>
   );
 }
 
@@ -916,13 +1051,11 @@ function DocumentRow({
 
   if (!file || file.pages === 0) {
     return (
-      <div className="flex items-center gap-3 rounded-lg border border-dashed border-review-200 bg-review-50/60 px-3 py-2">
-        <span className="rounded-md bg-surface px-1.5 py-0.5 font-mono text-[11px] font-semibold text-review-700 ring-1 ring-inset ring-review-200">
+      <div className="flex items-center gap-2 rounded-lg border border-dashed border-review-200 bg-review-50/60 px-2.5 py-1.5 text-xs text-review-700">
+        <Tag color="warning" className="font-mono text-[10px] m-0">
           {role}
-        </span>
-        <span className="flex-1 text-[12.5px] text-review-700">
-          {roleLabel} still being extracted
-        </span>
+        </Tag>
+        <span className="flex-1">{roleLabel} still being extracted</span>
       </div>
     );
   }
@@ -931,24 +1064,21 @@ function DocumentRow({
     <button
       type="button"
       onClick={() => onOpen(file)}
-      className="flex w-full items-center gap-3 rounded-lg border border-edge bg-surface/85 px-3 py-2 text-left shadow-glass transition-colors hover:border-brand-200 hover:bg-surface"
+      className="flex w-full items-center gap-2 rounded-lg border border-line bg-surface/80 px-2.5 py-1.5 text-left text-xs transition-colors hover:border-brand-300 hover:bg-surface"
     >
-      <span className="rounded-md bg-gradient-to-b from-brand-500 to-brand-700 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-white">
+      <Tag color="blue" className="font-mono text-[10px] m-0">
         {role}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[12.5px] font-medium text-ink-900">{file.name}</span>
-        <span className="tabular block text-[11px] text-ink-400">
-          {roleLabel} · {file.pages} pages · {file.sizeLabel}
-        </span>
+      </Tag>
+      <span className="min-w-0 flex-1 truncate font-medium text-ink-700">{file.name}</span>
+      <span className="text-[11px] text-ink-400">
+        {file.pages} {file.pages === 1 ? "page" : "pages"} · {file.sizeLabel}
       </span>
       {file.scanned && (
-        <span className="inline-flex items-center gap-1 rounded-md bg-review-50 px-1.5 py-0.5 text-[10.5px] font-medium text-review-700 ring-1 ring-inset ring-review-200">
-          <ScanLine className="size-3" strokeWidth={2.25} />
+        <Tag color="warning" icon={<ScanOutlined />} className="m-0 text-[10px]">
           Scanned
-        </span>
+        </Tag>
       )}
-      <ExternalLink className="size-3.5 shrink-0 text-ink-400" strokeWidth={2} />
+      <FileTextOutlined className="text-ink-400 text-xs" />
     </button>
   );
 }
@@ -1041,11 +1171,14 @@ function Workflow({ email }: { email: InboxEmail }) {
   }
 
   return (
-    <section className="mt-6 rounded-xl border border-edge bg-surface/55 p-4">
-      <h3 className="text-sm font-semibold text-ink-900">Workflow lifecycle</h3>
+    <Card
+      size="small"
+      className="border-edge bg-surface/70 shadow-sm"
+      title={<span className="text-xs font-semibold text-ink-700">Workflow Lifecycle</span>}
+    >
       <Steps
         aria-label="Email workflow lifecycle"
-        className="mt-3"
+        className="mt-1"
         size="small"
         responsive
         items={steps.map((step) => ({
@@ -1053,6 +1186,6 @@ function Workflow({ email }: { email: InboxEmail }) {
           status: step.state === "done" ? "finish" : step.state === "current" ? "process" : "wait",
         }))}
       />
-    </section>
+    </Card>
   );
 }

@@ -308,8 +308,9 @@ class SIReturnRequest(BaseModel):
 
 
 class CategoryDraftRequest(BaseModel):
-    expected_version: int = Field(ge=0)
-    custom_instructions: str = Field(default="", max_length=2000)
+    expected_version: int | None = Field(default=None, ge=0)
+    custom_instructions: str = Field(default="", max_length=5000)
+    response_text: str = Field(default="", max_length=5000)
 
 
 class CategoryCompleteRequest(BaseModel):

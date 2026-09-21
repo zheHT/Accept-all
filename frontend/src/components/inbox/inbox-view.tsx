@@ -113,6 +113,15 @@ export function InboxView() {
     if (match) {
       setSelected(match);
       markEmailRead(match.id);
+      void getCase(match.id)
+        .then((detail) => {
+          const updated = inboxDetail(detail);
+          setSelected((prev) => (prev?.id === match.id ? updated : prev));
+          setEmails((current) =>
+            current.map((entry) => (entry.id === match.id ? updated : entry)),
+          );
+        })
+        .catch(() => { });
     }
   }, [emails, markEmailRead]);
 
@@ -124,15 +133,15 @@ export function InboxView() {
       url.searchParams.set("email", item.id);
       window.history.replaceState({}, "", url.toString());
 
-      if (item.caseRef) {
-        void getCase(item.caseRef)
-          .then((detail) => {
-            setEmails((current) =>
-              current.map((entry) => (entry.id === item.id ? inboxDetail(detail) : entry)),
-            );
-          })
-          .catch(() => {});
-      }
+      void getCase(item.id)
+        .then((detail) => {
+          const updated = inboxDetail(detail);
+          setSelected((prev) => (prev?.id === item.id ? updated : prev));
+          setEmails((current) =>
+            current.map((entry) => (entry.id === item.id ? updated : entry)),
+          );
+        })
+        .catch(() => { });
     },
     [markEmailRead],
   );
@@ -346,11 +355,13 @@ export function InboxView() {
       title: "ACTION",
       key: "action",
       align: "right",
-      width: 90,
+      width: 110,
       render: (_, email) => (
         <Button
           size="small"
           icon={<EyeOutlined />}
+          style={{ width: 84 }}
+          className="inline-flex items-center justify-center"
           onClick={(e) => {
             e.stopPropagation();
             openEmail(email);
@@ -463,7 +474,7 @@ export function InboxView() {
           columns={columns}
           dataSource={filtered}
           pagination={{
-            pageSize: 10,
+            defaultPageSize: 10,
             showSizeChanger: true,
             pageSizeOptions: ["10", "25", "50"],
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} emails`,

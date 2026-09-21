@@ -10,7 +10,7 @@ import {
   UserRoundSearch,
   type LucideIcon,
 } from "lucide-react";
-import type { CategoryWorkflowState, SIArtifactMetadata } from "./api";
+import type { CaseDraft, CategoryWorkflowState, SIArtifactMetadata } from "./api";
 
 export type EmailClassification =
   | "document_comparison"
@@ -160,6 +160,7 @@ export interface InboxEmail {
   isSenderBlocked?: boolean;
   assignedTeam?: string | null;
   siArtifact?: SIArtifactMetadata | null;
+  draft?: CaseDraft | null;
 }
 
 export interface IntakeTotals {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ChevronLeft,
   ChevronRight,
@@ -9,7 +10,6 @@ import {
   FileText,
   Minus,
   Plus,
-  Rows2,
   ScanLine,
   X,
 } from "lucide-react";
@@ -18,7 +18,6 @@ import { getDocumentContent } from "@/lib/api";
 import { downloadFile } from "@/lib/download-file";
 import type { DocumentEvidence } from "@/lib/review-data";
 
-type Layout = "side-by-side" | "stacked";
 type PaneMode = "original" | "text";
 type Role = "SI" | "BL";
 
@@ -59,11 +58,15 @@ export function DocumentComparison({
 }: DocumentComparisonProps) {
   const dialogRef = useRef<HTMLElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
-  const [layout, setLayout] = useState<Layout>("side-by-side");
+  const [mounted, setMounted] = useState(false);
   const [positions, setPositions] = useState<Record<Role, Position>>({ SI: DEFAULT_POSITION, BL: DEFAULT_POSITION });
   const [sourceUrls, setSourceUrls] = useState<Partial<Record<Role, string>>>({});
   const [sourceErrors, setSourceErrors] = useState<Partial<Record<Role, string>>>({});
   const sourceUrlsRef = useRef(sourceUrls);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const documents = useMemo(() => ({ SI: si, BL: bl }), [si, bl]);
   const storageKey = `shipverify:document-position:${si.caseId || "case"}:${si.documentId || si.name}:${bl?.documentId || bl?.name || ""}`;
@@ -167,15 +170,15 @@ export function DocumentComparison({
     }
   }, [documents]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center p-2 sm:p-4 md:p-6">
+  return createPortal(
+    <div className="fixed inset-0 z-[1100] flex items-center justify-center p-2 sm:p-4 md:p-6">
       <button
         type="button"
         aria-label="Close document comparison"
         onClick={onClose}
-        className="absolute inset-0 animate-[fade-in_0.15s_ease-out] bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 animate-[fade-in_0.15s_ease-out] bg-black/70 backdrop-blur-sm"
       />
 
       <section
@@ -184,9 +187,9 @@ export function DocumentComparison({
         aria-modal="true"
         aria-label={heading}
         tabIndex={-1}
-        className="glass-solid relative flex h-[90vh] max-h-[920px] w-full max-w-[1440px] animate-[fade-in_0.2s_ease-out] flex-col overflow-hidden rounded-2xl border border-line shadow-2xl outline-none"
+        className="glass-solid relative z-10 flex h-[90vh] max-h-[920px] w-full max-w-[1440px] animate-[fade-in_0.2s_ease-out] flex-col overflow-hidden rounded-2xl border border-line shadow-2xl outline-none"
       >
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5 sm:py-3.5">
+        <header className="shrink-0 flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5 sm:py-3.5">
           <div className="flex min-w-0 items-center gap-3">
             <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200">
               <Columns2 className="size-[17px]" strokeWidth={2} />
@@ -197,33 +200,29 @@ export function DocumentComparison({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {bl && (
-              <div className="hidden rounded-lg border border-line bg-surface/70 sm:flex">
-                <button type="button" onClick={() => setLayout("side-by-side")} aria-pressed={layout === "side-by-side"} className={cn("flex items-center gap-1.5 rounded-l-lg px-2.5 py-1.5 text-[11.5px] font-medium transition-colors", layout === "side-by-side" ? "bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200 font-semibold" : "text-ink-400 hover:text-ink-700")}>
-                  <Columns2 className="size-3.5" strokeWidth={2} /> Side by side
-                </button>
-                <button type="button" onClick={() => setLayout("stacked")} aria-pressed={layout === "stacked"} className={cn("flex items-center gap-1.5 rounded-r-lg px-2.5 py-1.5 text-[11.5px] font-medium transition-colors", layout === "stacked" ? "bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200 font-semibold" : "text-ink-400 hover:text-ink-700")}>
-                  <Rows2 className="size-3.5" strokeWidth={2} /> Stacked
-                </button>
-              </div>
-            )}
-            <button type="button" onClick={onClose} aria-label="Close" className="grid size-8 place-items-center rounded-lg text-ink-400 transition-colors hover:bg-surface hover:text-ink-900">
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="grid size-8 place-items-center rounded-lg text-ink-400 transition-colors hover:bg-surface hover:text-ink-900"
+            >
               <X className="size-4" strokeWidth={2} />
             </button>
           </div>
         </header>
 
-        <div className={cn("grid min-h-0 flex-1 gap-3 overflow-y-auto bg-canvas/60 p-3 sm:gap-4 sm:p-4 xl:grid-cols-2", layout === "stacked" && "xl:grid-cols-1")}>
+        <div className={cn("grid min-h-0 flex-1 gap-3 overflow-y-auto bg-canvas/60 p-3 sm:gap-4 sm:p-4", bl ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1")}>
           <DocumentPane role="SI" displayRole={singleRole || "SI"} evidence={si} problemField={problemField} position={positions.SI} sourceUrl={sourceUrls.SI} sourceError={sourceErrors.SI} onChange={(next) => setPositions((current) => ({ ...current, SI: { ...current.SI, ...next } }))} onLoadSource={() => void loadSource("SI")} />
           {bl && <DocumentPane role="BL" displayRole="BL" evidence={bl} problemField={problemField} position={positions.BL} sourceUrl={sourceUrls.BL} sourceError={sourceErrors.BL} onChange={(next) => setPositions((current) => ({ ...current, BL: { ...current.BL, ...next } }))} onLoadSource={() => void loadSource("BL")} />}
         </div>
 
-        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 sm:px-5">
+        <footer className="shrink-0 flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 sm:px-5">
           <span className="text-[11.5px] text-ink-400">Original documents and machine extraction are preserved; reviewer decisions are recorded separately.</span>
           <button type="button" onClick={onClose} className="btn-glass px-3 py-1.5 text-[12px]">Close</button>
         </footer>
       </section>
-    </div>
+    </div>,
+    document.body
   );
 }
 function DocumentPane({
@@ -301,11 +300,11 @@ function DocumentPane({
   return (
     <article
       className={cn(
-        "flex min-h-[360px] min-w-0 flex-col overflow-hidden rounded-xl border bg-surface shadow-glass",
+        "flex h-full min-h-[360px] min-w-0 flex-col overflow-hidden rounded-xl border bg-surface shadow-glass",
         role === "BL" && evidence.extractedValue === null ? "border-review-200/80" : "border-line"
       )}
     >
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-3 py-3 sm:px-4">
+      <header className="shrink-0 flex flex-wrap items-start justify-between gap-3 border-b border-line px-3 py-3 sm:px-4">
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-2">
             <span
@@ -358,7 +357,7 @@ function DocumentPane({
         </button>
       </header>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-surface/60 px-3 py-2 sm:px-4">
+      <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-b border-line bg-surface/60 px-3 py-2 sm:px-4">
         <div role="tablist" aria-label={`${role} document view`} className="flex rounded-lg border border-line bg-canvas/40 p-0.5">
           <button
             type="button"
@@ -418,9 +417,9 @@ function DocumentPane({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 bg-canvas/60">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas/60">
         {position.mode === "original" ? (
-          <div className="relative flex h-[min(65vh,720px)] min-h-[380px] flex-col">
+          <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
             {canPreviewOriginal && sourceUrl && !sourceError ? (
               <iframe
                 title={`${evidence.name} original view`}
@@ -428,8 +427,8 @@ function DocumentPane({
                 className="min-h-0 flex-1 border-0 bg-white"
               />
             ) : (
-              <div className="flex flex-1 flex-col overflow-hidden">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 bg-amber-500/10 px-3.5 py-2 text-[12px] text-amber-900 dark:text-amber-200">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 bg-amber-500/10 px-3.5 py-2 text-[12px] text-amber-900 dark:text-amber-200">
                   <div className="flex items-center gap-2 font-medium">
                     <FileText className="size-3.5 shrink-0 text-amber-600" />
                     <span>
@@ -452,7 +451,7 @@ function DocumentPane({
                       fontSize: `${Math.max(10, (11.5 * position.zoom) / 100)}px`,
                       lineHeight: 1.85,
                     }}
-                    className="mx-auto max-w-[760px] whitespace-pre-wrap break-words rounded-xl border border-line bg-surface px-3 py-4 font-mono text-ink-700 shadow-glass sm:px-5"
+                    className="mx-auto min-h-full max-w-[760px] whitespace-pre-wrap break-words rounded-xl border border-line bg-surface px-3 py-4 font-mono text-ink-700 shadow-glass sm:px-5"
                   >
                     {unreadable && (
                       <span className="mb-3 block rounded-lg border border-review-200 bg-review-50/70 px-3 py-2 font-sans text-[12px] font-medium text-review-700">
@@ -482,7 +481,7 @@ function DocumentPane({
               </div>
             )}
             {isPdf && sourceUrl && !sourceError && pageCount > 1 && (
-              <div className="flex items-center justify-center gap-2 border-t border-line bg-surface/70 px-3 py-2">
+              <div className="shrink-0 flex items-center justify-center gap-2 border-t border-line bg-surface/70 px-3 py-2">
                 <button
                   type="button"
                   onClick={() => onChange({ page: Math.max(1, position.page - 1) })}
@@ -523,14 +522,14 @@ function DocumentPane({
           <div
             ref={textRef}
             onScroll={(event) => onChange({ textScrollTop: event.currentTarget.scrollTop })}
-            className="h-[min(65vh,720px)] min-h-[380px] overflow-y-auto p-3 sm:p-4"
+            className="h-full min-h-0 flex-1 overflow-y-auto p-3 sm:p-4"
           >
             <pre
               style={{
                 fontSize: `${Math.max(10, (11.5 * position.zoom) / 100)}px`,
                 lineHeight: 1.85,
               }}
-              className="mx-auto max-w-[760px] whitespace-pre-wrap break-words rounded-xl border border-line bg-surface px-3 py-4 font-mono text-ink-700 shadow-glass sm:px-5"
+              className="mx-auto min-h-full max-w-[760px] whitespace-pre-wrap break-words rounded-xl border border-line bg-surface px-3 py-4 font-mono text-ink-700 shadow-glass sm:px-5"
             >
               {unreadable && (
                 <span className="mb-3 block rounded-lg border border-review-200 bg-review-50/70 px-3 py-2 font-sans text-[12px] font-medium text-review-700">
@@ -560,7 +559,7 @@ function DocumentPane({
         )}
       </div>
 
-      <div className="border-t border-line px-3 py-2.5 sm:px-4">
+      <div className="shrink-0 border-t border-line bg-surface px-3 py-2.5 sm:px-4">
         <p className="text-[12px]">
           <span className="text-ink-400">{problemField} read as: </span>
           <span className={cn("font-semibold", evidence.extractedValue ? "text-ink-900" : "text-review-700")}>

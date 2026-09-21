@@ -14,7 +14,7 @@ import {
   UserOutlined,
   WarningFilled,
 } from "@ant-design/icons";
-import { Avatar, Badge, Dropdown, List, Popover, type MenuProps, Tooltip } from "antd";
+import { Avatar, Badge, Dropdown, Listy, Popover, type MenuProps, Tooltip } from "antd";
 import type { ComponentType } from "react";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/toast";
@@ -193,22 +193,25 @@ export function Header() {
         <Popover
           arrow={false}
           content={
-            <List
-              className="max-h-80 w-[360px] overflow-y-auto"
-              dataSource={notifications}
-              loading={dashboard.loading && notifications.length === 0}
-              locale={{ emptyText: "No unresolved cases." }}
-              rowKey="id"
-              size="small"
-              renderItem={(notification) => {
-                const tone = TONE_CONFIG[notification.tone];
-                const Icon = tone.icon;
-                return (
-                  <List.Item style={{ padding: 0 }}>
+            notifications.length === 0 ? (
+              <div className="flex h-32 w-[360px] items-center justify-center text-xs text-ink-400">
+                {dashboard.loading ? "Loading notifications..." : "No unresolved cases."}
+              </div>
+            ) : (
+              <Listy
+                className="max-h-80 w-[360px] overflow-y-auto"
+                items={notifications}
+                rowKey="id"
+                virtual={false}
+                itemRender={(notification) => {
+                  const tone = TONE_CONFIG[notification.tone];
+                  const Icon = tone.icon;
+                  return (
                     <button
+                      key={notification.id}
                       type="button"
                       onClick={() => openNotification(notification)}
-                      className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-surface/90"
+                      className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-surface/90 border-b border-edge/60 last:border-b-0"
                     >
                       <span
                         className={cn(
@@ -230,10 +233,10 @@ export function Header() {
                         </span>
                       </span>
                     </button>
-                  </List.Item>
-                );
-              }}
-            />
+                  );
+                }}
+              />
+            )
           }
           onOpenChange={setOpenNotifications}
           open={openNotifications}

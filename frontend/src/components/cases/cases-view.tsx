@@ -373,17 +373,21 @@ export function CasesView() {
       align: "right",
       width: 110,
       render: (_, item) => {
+        const actionBtnStyle = { width: 84 };
+        const actionBtnClass = "inline-flex items-center justify-center";
+
         if (item.action === "review") {
           return (
             <Button
               type="primary"
               size="small"
               icon={<SolutionOutlined />}
+              style={{ ...actionBtnStyle, backgroundColor: "#faad14" }}
+              className={actionBtnClass}
               onClick={(e) => {
                 e.stopPropagation();
                 reviewCase(item);
               }}
-              style={{ backgroundColor: "#faad14" }}
             >
               Review
             </Button>
@@ -395,6 +399,8 @@ export function CasesView() {
               danger
               size="small"
               icon={<ReloadOutlined />}
+              style={actionBtnStyle}
+              className={actionBtnClass}
               onClick={(e) => {
                 e.stopPropagation();
                 void retryCase(item.id);
@@ -408,6 +414,8 @@ export function CasesView() {
           <Button
             size="small"
             icon={<EyeOutlined />}
+            style={actionBtnStyle}
+            className={actionBtnClass}
             onClick={(e) => {
               e.stopPropagation();
               openCase(item);
@@ -582,7 +590,7 @@ export function CasesView() {
           columns={columns}
           dataSource={rows}
           pagination={{
-            pageSize: 10,
+            defaultPageSize: 10,
             showSizeChanger: true,
             pageSizeOptions: ["10", "25", "50"],
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} cases`,

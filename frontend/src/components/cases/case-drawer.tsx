@@ -138,7 +138,7 @@ export function CaseDrawer({
       <Drawer
         open={Boolean(verificationCase)}
         onClose={onClose}
-        width={780}
+        size={780}
         title={
           <div className="flex flex-col gap-1 py-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -177,7 +177,7 @@ export function CaseDrawer({
                 Go to Review Queue
               </Button>
             ) : (
-              <Button type="default" onClick={onClose}>
+              <Button type="default" onClick={onClose} className="min-w-[96px]">
                 Close
               </Button>
             )}
@@ -254,7 +254,7 @@ export function CaseDrawer({
                   <Progress
                     percent={Math.round(item.confidence * 100)}
                     size="small"
-                    style={{ width: 100 }}
+                    className="w-24"
                   />
                 </div>
               )}
