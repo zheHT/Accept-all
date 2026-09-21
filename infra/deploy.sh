@@ -208,6 +208,10 @@ if gcloud secrets versions list telegram-bot-token --project "$PROJECT_ID" --fil
         -d "$COMMANDS_JSON")
     printf '%s' "$COMMANDS_RESPONSE" | "$PYTHON_BIN" -c 'import json, sys; result = json.load(sys.stdin); sys.exit(0 if result.get("ok") is True else "Telegram command registration failed")'
 
+    curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TOKEN}/setMyName" \
+        -H "Content-Type: application/json" \
+        -d '{"name":"ShipVerify"}' >/dev/null
+
     curl -s -X POST "https://api.telegram.org/bot${TOKEN}/setMyDescription" \
         -H "Content-Type: application/json" \
         -d '{"description":"ShipVerify is an intelligent maritime shipping document triage and reconciliation agent. Upload Shipping Instructions (SI) and draft Bills of Lading (BL) to automatically detect discrepancies across 7 verified fields, review alerts, and coordinate email responses."}' >/dev/null

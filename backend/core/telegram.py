@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import re
 import secrets
 from datetime import timedelta
 from typing import Any
@@ -9,11 +10,23 @@ import httpx
 
 from backend.core.repository import CaseRepository, utcnow
 
+TELEGRAM_BOT_NAME = "ShipVerify"
+
 TELEGRAM_BOT_DESCRIPTION = (
     "ShipVerify is an intelligent maritime shipping document triage and reconciliation agent. "
     "Upload Shipping Instructions (SI) and draft Bills of Lading (BL) to automatically detect "
     "discrepancies across 7 verified fields, review alerts, and coordinate email responses."
 )
+
+_LEGACY_BRAND_RE = re.compile(
+    r"(?<![\w@./-])ClassAll(?![\w@./-])",
+    flags=re.IGNORECASE,
+)
+
+
+def sanitize_telegram_branding(text: str) -> str:
+    """Replace the legacy product name in Telegram prose without changing URLs or handles."""
+    return _LEGACY_BRAND_RE.sub(TELEGRAM_BOT_NAME, text)
 
 TELEGRAM_BOT_SHORT_DESCRIPTION = (
     "ShipVerify Maritime Shipping Document Triage & SI/BL Discrepancy Verification Agent."
@@ -96,6 +109,7 @@ class TelegramClient:
         reply_markup: dict[str, Any] | None = None,
         parse_mode: str | None = "HTML",
     ) -> dict[str, Any]:
+        text = sanitize_telegram_branding(text)
         payload: dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
@@ -131,6 +145,7 @@ class TelegramClient:
         reply_markup: dict[str, Any] | None = None,
         parse_mode: str | None = "HTML",
     ) -> dict[str, Any]:
+        text = sanitize_telegram_branding(text)
         payload: dict[str, Any] = {
             "chat_id": chat_id,
             "message_id": int(message_id),
@@ -183,7 +198,11 @@ class TelegramClient:
     def set_my_short_description(self, short_description: str) -> dict[str, Any]:
         return self._call("setMyShortDescription", {"short_description": short_description})
 
+    def set_my_name(self, name: str) -> dict[str, Any]:
+        return self._call("setMyName", {"name": name})
+
     def sync_bot_profile(self) -> None:
+        self.set_my_name(TELEGRAM_BOT_NAME)
         self.set_my_commands()
         self.set_my_description(TELEGRAM_BOT_DESCRIPTION)
         self.set_my_short_description(TELEGRAM_BOT_SHORT_DESCRIPTION)
