@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "site": "classall-review-0866395749",
+    "site": "shipverify-0866395749",
     "public": "frontend/out",
     "cleanUrls": true,
     "trailingSlash": false,

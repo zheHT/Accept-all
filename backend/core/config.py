@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     gcs_bucket: str = "gen-lang-client-0866395749-classall-docs"
     doc_tasks_topic: str = "doc-tasks"
     gmail_events_topic: str = "gmail-events"
-    dashboard_base_url: str = "https://classall-review-0866395749.web.app"
+    dashboard_base_url: str = "https://shipverify-0866395749.web.app"
     api_base_url: str = "http://localhost:8080"
     app_env: str = "local"
 

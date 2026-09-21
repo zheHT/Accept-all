@@ -97,8 +97,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     app = FastAPI(title="ShipVerify API", version="0.1.0")
     origins = [
         settings.dashboard_base_url.rstrip("/"),
-        "https://classall-review-0866395749.web.app",
-        "https://classall-review-0866395749.firebaseapp.com",
+        "https://shipverify-0866395749.web.app",
+        "https://shipverify-0866395749.firebaseapp.com",
         "https://gen-lang-client-0866395749.web.app",
         "https://gen-lang-client-0866395749.firebaseapp.com",
         "http://localhost:5173",

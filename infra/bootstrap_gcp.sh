@@ -130,9 +130,9 @@ if ! firebase projects:list --json 2>/dev/null | grep -q "\"$PROJECT_ID\""; then
     firebase projects:addfirebase "$PROJECT_ID"
 fi
 
-if ! firebase hosting:sites:list --project "$PROJECT_ID" --json 2>/dev/null | grep -q "classall-review-0866395749"; then
+if ! firebase hosting:sites:list --project "$PROJECT_ID" --json 2>/dev/null | grep -q "shipverify-0866395749"; then
     echo "Creating Firebase Hosting site..."
-    firebase hosting:sites:create classall-review-0866395749 --project "$PROJECT_ID"
+    firebase hosting:sites:create shipverify-0866395749 --project "$PROJECT_ID"
 fi
 
 if ! firebase apps:list WEB --project "$PROJECT_ID" --json 2>/dev/null | grep -q "ClassAll Reviewer"; then
