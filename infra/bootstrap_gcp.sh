@@ -140,5 +140,21 @@ if ! firebase apps:list WEB --project "$PROJECT_ID" --json 2>/dev/null | grep -q
     firebase apps:create WEB "ClassAll Reviewer" --project "$PROJECT_ID"
 fi
 
+echo "Ensuring authorized domains in Firebase Authentication..."
+python -c "
+import google.auth
+from google.auth.transport.requests import Request
+import urllib.request, json
+try:
+    credentials, project = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
+    credentials.refresh(Request())
+    url = f'https://identitytoolkit.googleapis.com/admin/v2/projects/{project}/config?updateMask=authorizedDomains'
+    payload = {'authorizedDomains': ['localhost', f'{project}.firebaseapp.com', f'{project}.web.app', 'shipverify-0866395749.web.app', 'shipverify-0866395749.firebaseapp.com']}
+    req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={'Authorization': f'Bearer {credentials.token}', 'X-Goog-User-Project': project, 'Content-Type': 'application/json'}, method='PATCH')
+    urllib.request.urlopen(req)
+except Exception as e:
+    print('Warning: could not auto-update authorized domains:', e)
+" 2>/dev/null || true
+
 echo "Bootstrap complete. Add external credential versions before running infra/deploy.sh."
 echo "The Gmail refresh-token version is created later by the OAuth callback."
