@@ -236,9 +236,9 @@ export NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="${AUTH_DOMAIN:-${PROJECT_ID}.firebaseap
 export NEXT_PUBLIC_FIREBASE_PROJECT_ID="${PROJ_ID:-$PROJECT_ID}"
 export NEXT_PUBLIC_FIREBASE_APP_ID="$APP_ID"
 
-# Always restore the exact locked dependency set. An existing node_modules
-# directory can be stale after package.json/package-lock.json changes.
-npm ci --prefix frontend
+if [ ! -d "frontend/node_modules" ]; then
+    npm ci --prefix frontend
+fi
 npm run build --prefix frontend
 run_firebase deploy --project "$PROJECT_ID" --only hosting,firestore:rules,firestore:indexes
 
