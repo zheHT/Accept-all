@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { API_BASE_URL, apiFetch, configureApiAuth, confirmSentDraft, getCases, getSession, prepareDraft, type CaseSummary } from "./api";
+import { API_BASE_URL, apiFetch, configureApiAuth, confirmSentDraft, draftCategoryResponse, getCases, getDocumentContent, getSession, prepareDraft, type CaseSummary } from "./api";
 import { statusLabel } from "./format";
 import { shouldPoll } from "./use-live-query";
 
@@ -84,12 +84,52 @@ describe("authenticated API client", () => {
     expect(result.draft?.state).toBe("SENT");
   });
 
+  it("calls draftCategoryResponse endpoint with response text and expected version", async () => {
+    let capturedUrl = "";
+    let capturedBody = "";
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+      capturedUrl = url;
+      capturedBody = init.body as string;
+      return Response.json({
+        case_id: "case-200",
+        draft: {
+          state: "READY",
+          delivery_mode: "compose",
+          body: "Thank you for reaching out.",
+          gmail_url: "https://mail.google.com/mail/?view=cm&fs=1",
+        },
+      });
+    }));
+
+    const result = await draftCategoryResponse("case-200", "Thank you for reaching out.", 1);
+    expect(capturedUrl).toBe(`${API_BASE_URL}/api/cases/case-200/actions/draft-response`);
+    expect(JSON.parse(capturedBody)).toEqual({
+      custom_instructions: "Thank you for reaching out.",
+      response_text: "Thank you for reaching out.",
+      expected_version: 1,
+    });
+    expect(result.draft?.body).toBe("Thank you for reaching out.");
+    expect(result.draft?.gmail_url).toContain("https://mail.google.com");
+  });
+
   it("translates generic 404 Not Found to backend version mismatch error", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "Not Found" }), { status: 404, statusText: "Not Found" })));
 
     await expect(apiFetch("/api/cases/123/draft/prepare", { method: "POST" })).rejects.toThrow(
       "Endpoint not found (404). The backend service appears to be running an older build without this route."
     );
+  });
+
+  it("keeps the source filename on document blobs used by the browser preview", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("%PDF-1.7", {
+      headers: { "Content-Type": "application/pdf" },
+    })));
+
+    const { blob } = await getDocumentContent("case-1", "doc-1", "Draft Bill of Lading.pdf");
+
+    expect(blob).toBeInstanceOf(File);
+    expect(blob.name).toBe("Draft Bill of Lading.pdf");
+    expect(blob.type).toBe("application/pdf");
   });
 });
 

@@ -75,7 +75,9 @@ export function IntakeBreakdown({
   return (
     <section className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="eyebrow">Inbox intake — select to filter the list</p>
+        <h2 className="text-[14px] font-semibold tracking-tight text-ink-900">
+          Inbox intake — select a category to filter
+        </h2>
         <div className="flex items-center gap-3">
           {lastSync && (
             <span className="tabular text-[11.5px] text-ink-400">Last sync {lastSync}</span>

@@ -2,16 +2,18 @@
 
 import { useMemo, useState } from "react";
 import {
-  CalendarDays,
-  Clock3,
-  Database,
-  FileText,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-} from "lucide-react";
+  CalendarOutlined,
+  ClockCircleOutlined,
+  CloudUploadOutlined,
+  DatabaseOutlined,
+  FileTextOutlined,
+  ReloadOutlined,
+  SafetyCertificateOutlined,
+  SearchOutlined,
+} from "@ant-design/icons";
+import { Button, Card, Empty, Input, Segmented, Skeleton, Statistic, Tag } from "antd";
 import { PageHeading } from "@/components/app-shell/page-heading";
-import { EmptyState, ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
+import { ErrorState, StaleNotice } from "@/components/ui/live-state";
 import { useToast } from "@/components/ui/toast";
 import {
   fetchAssumptionRegistry,
@@ -21,15 +23,15 @@ import {
   type KnowledgeBaseWeek,
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { formatDate } from "@/lib/format";
+import { formatDate, sanitizeBranding } from "@/lib/format";
 import { useLiveQuery } from "@/lib/use-live-query";
 
 type RegistryFilter = "all" | "accepted" | "proposed";
 
-const REGISTRY_FILTERS: Array<{ id: RegistryFilter; label: string }> = [
-  { id: "all", label: "All" },
-  { id: "accepted", label: "Accepted" },
-  { id: "proposed", label: "Proposed" },
+const REGISTRY_FILTERS: Array<{ value: RegistryFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "accepted", label: "Accepted" },
+  { value: "proposed", label: "Proposed" },
 ];
 
 export default function KnowledgeBasePage() {
@@ -51,7 +53,7 @@ export default function KnowledgeBasePage() {
     return assumptions.filter((item) => {
       if (registryFilter !== "all" && item.status !== registryFilter) return false;
       if (!needle) return true;
-      return [item.field, item.normalized_value, item.status]
+      return [item.field, sanitizeBranding(item.normalized_value), item.status]
         .join(" ")
         .toLowerCase()
         .includes(needle);
@@ -79,7 +81,19 @@ export default function KnowledgeBasePage() {
     }
   };
 
-  if (weeks.loading && !weeks.data) return <LoadingState label="Loading knowledge base" />;
+  if (weeks.loading && !weeks.data) {
+    return (
+      <div className="flex flex-col gap-7">
+        <PageHeading
+          title="Knowledge Base"
+          subtitle="Weekly operational briefings, verified patterns, and the assumptions reviewers have governed over time."
+        />
+        <Card className="border-edge bg-surface/80 shadow-sm" styles={{ body: { padding: "24px" } }}>
+          <Skeleton active paragraph={{ rows: 8 }} />
+        </Card>
+      </div>
+    );
+  }
   if (weeks.error && !weeks.data) {
     return <ErrorState message={weeks.error} retry={() => void weeks.refresh()} />;
   }
@@ -91,189 +105,164 @@ export default function KnowledgeBasePage() {
         subtitle="Weekly operational briefings, verified patterns, and the assumptions reviewers have governed over time."
         actions={
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="btn-glass active:scale-95"
+            <Button
+              icon={<ReloadOutlined className={cn((weeks.loading || registry.loading) && "animate-spin")} />}
               disabled={weeks.loading || registry.loading}
               onClick={() => {
                 void Promise.all([weeks.refresh(), registry.refresh()]);
                 toast({ title: "Knowledge base refreshed", tone: "info" });
               }}
             >
-              <RefreshCw className={cn("size-3.5", (weeks.loading || registry.loading) && "animate-spin")} />
               Refresh
-            </button>
-            <button
-              type="button"
-              className="btn-primary active:scale-95"
-              disabled={publishing}
+            </Button>
+            <Button
+              type="primary"
+              icon={<CloudUploadOutlined className={cn(publishing && "animate-spin")} />}
+              loading={publishing}
               onClick={() => void publish()}
             >
-              <RefreshCw className={cn("size-4", publishing && "animate-spin")} />
-              {publishing ? "Publishing…" : "Publish current week"}
-            </button>
+              Publish current week
+            </Button>
           </div>
         }
       />
 
       {(weeks.stale || registry.stale) && <StaleNotice />}
 
-      <KnowledgeSummary
-        publications={publications.length}
-        totalCases={totalCases}
-        assumptions={assumptions.length}
-        accepted={acceptedCount}
-        latest={latest}
-      />
+      {/* Metric Cards */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <Card className="border-edge bg-surface/80 shadow-sm" styles={{ body: { padding: "20px 24px" } }}>
+          <Statistic
+            title="Published weeks"
+            value={publications.length}
+            prefix={<CalendarOutlined className="text-blue-500 mr-1" />}
+          />
+          <p className="text-xs text-ink-400 mt-2">Immutable weekly snapshots</p>
+        </Card>
 
-      <section className="grid min-w-0 gap-5 xl:max-h-[850px] xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,.75fr)]">
-        <article className="glass glass-sheen flex min-w-0 flex-col overflow-hidden">
-          <header className="flex shrink-0 flex-col gap-3 border-b border-line px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <Card className="border-edge bg-surface/80 shadow-sm" styles={{ body: { padding: "20px 24px" } }}>
+          <Statistic
+            title="Cases summarized"
+            value={totalCases}
+            prefix={<FileTextOutlined className="text-indigo-500 mr-1" />}
+          />
+          <p className="text-xs text-ink-400 mt-2">Across published periods</p>
+        </Card>
+
+        <Card className="border-edge bg-surface/80 shadow-sm" styles={{ body: { padding: "20px 24px" } }}>
+          <Statistic
+            title="Governed assumptions"
+            value={assumptions.length}
+            prefix={<DatabaseOutlined className="text-amber-500 mr-1" />}
+          />
+          <p className="text-xs text-ink-400 mt-2">{acceptedCount} accepted by reviewers</p>
+        </Card>
+
+        <Card className="border-edge bg-surface/80 shadow-sm" styles={{ body: { padding: "20px 24px" } }}>
+          <Statistic
+            title="Latest briefing"
+            value={latest ? shortWeek(latest.week) : "None"}
+            prefix={<SafetyCertificateOutlined className="text-emerald-500 mr-1" />}
+          />
+          <p className="text-xs text-ink-400 mt-2">
+            {latest ? formatDate(latest.published_at) : "Publish the first report"}
+          </p>
+        </Card>
+      </div>
+
+      <section className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,.75fr)]">
+        {/* Weekly Briefings Card */}
+        <Card
+          className="border-edge bg-surface/80 shadow-sm overflow-hidden"
+          styles={{
+            header: { padding: "16px 24px" },
+            body: { padding: 0 },
+          }}
+          title={
             <div>
-              <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">Weekly briefings</h2>
-              <p className="mt-1 text-[12.5px] text-ink-500">
+              <h2 className="text-[15px] font-bold text-ink-900">Weekly Briefings</h2>
+              <p className="text-xs font-normal text-ink-500 mt-0.5">
                 Each publication summarizes the requested ISO week and preserves its source watermark.
               </p>
             </div>
-            <span className="tabular rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 ring-1 ring-inset ring-brand-200">
-              {publications.length} published
-            </span>
-          </header>
-
+          }
+          extra={<Tag color="blue">{publications.length} published</Tag>}
+        >
           {!publications.length ? (
-            <div className="flex flex-1 items-center justify-center p-6">
-              <EmptyState
-                title="No weekly briefings yet"
-                detail="Publish the current week after reviewed operational cases are available."
-              />
+            <div className="flex flex-1 items-center justify-center p-8">
+              <Empty description="No weekly briefings yet. Publish the current week after reviewed cases are available." />
             </div>
           ) : (
-            <ol className="flex-1 min-h-0 divide-y divide-line overflow-y-auto max-h-[600px] xl:max-h-none">
+            <ol className="divide-y divide-line overflow-y-auto max-h-[650px]">
               {publications.map((week, index) => (
-                <WeeklyBriefing
-                  key={week.week}
-                  week={week}
-                  latest={index === 0}
-                />
+                <WeeklyBriefing key={week.week} week={week} latest={index === 0} />
               ))}
             </ol>
           )}
-        </article>
+        </Card>
 
-        <article className="glass glass-sheen flex min-w-0 flex-col overflow-hidden">
-          <header className="shrink-0 border-b border-line px-5 py-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-[15px] font-semibold tracking-tight text-ink-900">Assumption registry</h2>
-                <p className="mt-1 text-[12.5px] text-ink-500">Evidence-backed operational interpretations.</p>
-              </div>
-              <span className="tabular text-[12px] font-semibold text-ink-500">{assumptions.length}</span>
+        {/* Assumption Registry Card */}
+        <Card
+          className="border-edge bg-surface/80 shadow-sm overflow-hidden"
+          styles={{
+            header: { padding: "16px 20px" },
+            body: { padding: 0 },
+          }}
+          title={
+            <div>
+              <h2 className="text-[15px] font-bold text-ink-900">Assumption Registry</h2>
+              <p className="text-xs font-normal text-ink-500 mt-0.5">
+                Evidence-backed operational interpretations.
+              </p>
             </div>
+          }
+          extra={<span className="text-xs font-semibold text-ink-500">{assumptions.length} total</span>}
+        >
+          <div className="border-b border-line p-4 flex flex-col gap-3">
+            <Input
+              placeholder="Search field or interpretation…"
+              prefix={<SearchOutlined className="text-ink-400" />}
+              value={registryQuery}
+              onChange={(e) => setRegistryQuery(e.target.value)}
+              allowClear
+            />
 
-            <label className="relative mt-4 block">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-400" />
-              <input
-                type="search"
-                value={registryQuery}
-                onChange={(event) => setRegistryQuery(event.target.value)}
-                placeholder="Search field or interpretation…"
-                className="field-glass py-2.5 pl-9 pr-3"
-              />
-            </label>
+            <Segmented
+              block
+              value={registryFilter}
+              options={REGISTRY_FILTERS}
+              onChange={(val) => setRegistryFilter(val as RegistryFilter)}
+            />
+          </div>
 
-            <div className="mt-3 flex gap-1 rounded-xl bg-canvas/70 p-1 ring-1 ring-inset ring-line">
-              {REGISTRY_FILTERS.map((filter) => (
-                <button
-                  key={filter.id}
-                  type="button"
-                  aria-pressed={registryFilter === filter.id}
-                  onClick={() => setRegistryFilter(filter.id)}
-                  className={cn(
-                    "min-h-9 flex-1 rounded-lg px-2.5 text-[11.5px] font-semibold transition-colors active:scale-95",
-                    registryFilter === filter.id
-                      ? "bg-surface text-ink-900 shadow-glass"
-                      : "text-ink-400 hover:text-ink-700",
-                  )}
-                >
-                  {filter.label}
-                </button>
-              ))}
-            </div>
-          </header>
-
-          <div className="flex min-h-0 flex-1 flex-col">
+          <div className="overflow-y-auto max-h-[550px]">
             {registry.error && !registry.data ? (
-              <div className="flex flex-1 items-center justify-center p-6">
+              <div className="p-6">
                 <ErrorState message={registry.error} retry={() => void registry.refresh()} />
               </div>
             ) : registry.loading && !registry.data ? (
-              <div className="flex flex-1 items-center justify-center p-6">
-                <LoadingState label="Loading governed assumptions" />
+              <div className="p-6">
+                <Skeleton active paragraph={{ rows: 4 }} />
               </div>
             ) : !visibleAssumptions.length ? (
-              <div className="flex flex-1 items-center justify-center p-6">
-                <EmptyState
-                  title={assumptions.length ? "No assumptions match" : "No governed assumptions"}
-                  detail={assumptions.length ? "Try another search or status filter." : "Reviewed assumptions will accumulate here."}
+              <div className="py-12">
+                <Empty
+                  description={
+                    assumptions.length ? "No assumptions match filter" : "No governed assumptions yet"
+                  }
                 />
               </div>
             ) : (
-              <ul className="flex-1 min-h-0 divide-y divide-line overflow-y-auto max-h-[600px] xl:max-h-none">
-                {visibleAssumptions.map((item) => <AssumptionItem key={item.assumption_id} item={item} />)}
+              <ul className="divide-y divide-line">
+                {visibleAssumptions.map((item) => (
+                  <AssumptionItem key={item.assumption_id} item={item} />
+                ))}
               </ul>
             )}
           </div>
-        </article>
+        </Card>
       </section>
     </div>
-  );
-}
-
-function KnowledgeSummary({
-  publications,
-  totalCases,
-  assumptions,
-  accepted,
-  latest,
-}: {
-  publications: number;
-  totalCases: number;
-  assumptions: number;
-  accepted: number;
-  latest?: KnowledgeBaseWeek;
-}) {
-  const stats = [
-    { label: "Published weeks", value: publications, support: "Immutable weekly snapshots", icon: CalendarDays, accent: "bg-brand-500" },
-    { label: "Cases summarized", value: totalCases, support: "Across published periods", icon: FileText, accent: "bg-processing-500" },
-    { label: "Governed assumptions", value: assumptions, support: `${accepted} accepted by reviewers`, icon: Database, accent: "bg-review-500" },
-    { label: "Latest briefing", value: latest ? shortWeek(latest.week) : "None", support: latest ? formatDate(latest.published_at) : "Publish the first report", icon: ShieldCheck, accent: "bg-matched-500" },
-  ];
-
-  return (
-    <section className="glass glass-sheen grid grid-cols-2 overflow-hidden lg:grid-cols-4">
-      {stats.map((stat, index) => {
-        const Icon = stat.icon;
-        return (
-          <div
-            key={stat.label}
-            className={cn(
-              "relative min-w-0 px-4 py-4 sm:px-5",
-              index % 2 === 1 && "border-l border-line",
-              index >= 2 && "border-t border-line lg:border-t-0",
-              index > 0 && "lg:border-l lg:border-line",
-            )}
-          >
-            <span className={cn("absolute inset-x-0 top-0 h-[3px] opacity-70", stat.accent)} />
-            <div className="flex items-center gap-2 text-ink-400">
-              <Icon className="size-4" />
-              <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em]">{stat.label}</span>
-            </div>
-            <p className="tabular mt-3 truncate text-[26px] font-semibold leading-none tracking-tight text-ink-900">{stat.value}</p>
-            <p className="mt-2 text-[11.5px] leading-relaxed text-ink-400">{stat.support}</p>
-          </div>
-        );
-      })}
-    </section>
   );
 }
 
@@ -285,75 +274,75 @@ function WeeklyBriefing({
   latest: boolean;
 }) {
   const outcomes = [
-    { label: "Matched", value: week.status_counts.OK || 0, tone: "bg-matched-500" },
-    { label: "Mismatch", value: week.status_counts.MISMATCH || 0, tone: "bg-mismatch-500" },
-    { label: "Review", value: week.status_counts.NEEDS_REVIEW || 0, tone: "bg-review-500" },
+    { label: "Matched", value: week.status_counts.OK || 0, color: "#52c41a" },
+    { label: "Mismatch", value: week.status_counts.MISMATCH || 0, color: "#ff4d4f" },
+    { label: "Review", value: week.status_counts.NEEDS_REVIEW || 0, color: "#faad14" },
   ];
   const outcomeTotal = outcomes.reduce((sum, item) => sum + item.value, 0);
   const categories = Object.entries(week.category_counts)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 3);
-  return (
-    <li className="px-5 py-5">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-[15px] font-semibold tracking-tight text-ink-900">{formatWeek(week.week)}</p>
-            {latest && (
-              <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-700 ring-1 ring-inset ring-brand-200">
-                Latest
-              </span>
-            )}
-            <span className="rounded-full bg-matched-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-matched-700 ring-1 ring-inset ring-matched-200">
-              {week.status}
-            </span>
-          </div>
-          <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-ink-400">
-            <span className="inline-flex items-center gap-1.5"><Clock3 className="size-3.5" />Published {formatDate(week.published_at)}</span>
-            <span className="font-mono">{week.content_hash.slice(0, 10)}</span>
-          </p>
-          <p className="mt-3 max-w-3xl text-pretty text-[13px] leading-6 text-ink-500">
-            {week.summary_narrative || "This weekly snapshot contains deterministic operational counts and governed reviewer assumptions."}
-          </p>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-            <div>
-              <div className="flex h-2 overflow-hidden rounded-full bg-canvas ring-1 ring-inset ring-line">
-                {outcomes.map((outcome) => (
-                  <span
-                    key={outcome.label}
-                    className={outcome.tone}
-                    style={{ width: `${outcomeTotal ? (outcome.value / outcomeTotal) * 100 : 0}%` }}
-                  />
-                ))}
-              </div>
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-                {outcomes.map((outcome) => (
-                  <span key={outcome.label} className="inline-flex items-center gap-1.5 text-[11px] text-ink-500">
-                    <span className={cn("size-1.5 rounded-full", outcome.tone)} />
-                    {outcome.label} <strong className="tabular font-semibold text-ink-700">{outcome.value}</strong>
-                  </span>
-                ))}
-              </div>
+  return (
+    <li className="px-6 py-5 hover:bg-surface/50 transition-colors">
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-base font-bold text-ink-900">{formatWeek(week.week)}</span>
+            {latest && <Tag color="blue">Latest</Tag>}
+            <Tag color="success">{week.status}</Tag>
+          </div>
+          <span className="text-xs text-ink-400 flex items-center gap-1.5 font-mono">
+            <ClockCircleOutlined />
+            {formatDate(week.published_at)} · {week.content_hash.slice(0, 8)}
+          </span>
+        </div>
+
+        <p className="text-xs text-ink-600 leading-relaxed max-w-3xl">
+          {sanitizeBranding(week.summary_narrative) ||
+            "This weekly snapshot contains deterministic operational counts and governed reviewer assumptions."}
+        </p>
+
+        <div className="mt-2 flex flex-col gap-2">
+          {/* Multi-segment progress */}
+          <div className="flex h-2 overflow-hidden rounded-full bg-line">
+            {outcomes.map((outcome) => (
+              <span
+                key={outcome.label}
+                style={{
+                  width: `${outcomeTotal ? (outcome.value / outcomeTotal) * 100 : 0}%`,
+                  backgroundColor: outcome.color,
+                }}
+              />
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-4">
+              {outcomes.map((outcome) => (
+                <span key={outcome.label} className="inline-flex items-center gap-1.5 text-ink-600">
+                  <span className="size-2 rounded-full" style={{ backgroundColor: outcome.color }} />
+                  {outcome.label}: <strong className="text-ink-900">{outcome.value}</strong>
+                </span>
+              ))}
             </div>
-            <dl className="flex gap-5 sm:justify-end">
-              <div>
-                <dt className="text-[10px] uppercase tracking-[0.08em] text-ink-400">Cases</dt>
-                <dd className="tabular mt-1 text-[16px] font-semibold text-ink-900">{week.cases_analyzed}</dd>
-              </div>
-              <div>
-                <dt className="text-[10px] uppercase tracking-[0.08em] text-ink-400">Assumptions</dt>
-                <dd className="tabular mt-1 text-[16px] font-semibold text-ink-900">{week.assumptions_count}</dd>
-              </div>
-            </dl>
+
+            <div className="flex items-center gap-4 text-ink-700">
+              <span>
+                Cases: <strong className="text-ink-900">{week.cases_analyzed}</strong>
+              </span>
+              <span>
+                Assumptions: <strong className="text-ink-900">{week.assumptions_count}</strong>
+              </span>
+            </div>
           </div>
 
           {categories.length > 0 && (
-            <div className="mt-4 flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1 mt-1">
               {categories.map(([category, count]) => (
-                <span key={category} className="rounded-md bg-surface px-2 py-1 text-[10.5px] font-medium text-ink-500 ring-1 ring-inset ring-line">
+                <Tag key={category} color="default" className="text-[11px] font-mono m-0">
                   {category.replaceAll("_", " ")} · {count}
-                </span>
+                </Tag>
               ))}
             </div>
           )}
@@ -366,29 +355,25 @@ function WeeklyBriefing({
 function AssumptionItem({ item }: { item: AssumptionRecord }) {
   const accepted = item.status === "accepted";
   return (
-    <li className="px-5 py-4 transition-colors hover:bg-canvas/50">
+    <li className="px-5 py-3.5 hover:bg-surface/50 transition-colors">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[12.5px] font-semibold text-ink-900">{humanize(item.field)}</p>
-          <p className="mt-1.5 text-pretty text-[12.5px] leading-5 text-ink-500">{item.normalized_value}</p>
+          <p className="text-xs font-bold text-ink-900">{humanize(item.field)}</p>
+          <p className="text-xs text-ink-600 mt-1 leading-relaxed">{sanitizeBranding(item.normalized_value)}</p>
         </div>
-        <span className={cn(
-          "shrink-0 rounded-full px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.08em] ring-1 ring-inset",
-          accepted
-            ? "bg-matched-50 text-matched-700 ring-matched-200"
-            : "bg-review-50 text-review-700 ring-review-200",
-        )}>
+        <Tag color={accepted ? "success" : "warning"} className="m-0 uppercase text-[10px] font-bold">
           {item.status}
-        </span>
+        </Tag>
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10.5px] text-ink-400">
-        <span className="tabular">{item.evidence_count} linked case{item.evidence_count === 1 ? "" : "s"}</span>
-        <span className="tabular">{Math.round(item.confidence * 100)}% confidence</span>
+      <div className="mt-2 flex flex-wrap items-center gap-x-4 text-[11px] text-ink-400">
+        <span>{item.evidence_count} linked case{item.evidence_count === 1 ? "" : "s"}</span>
+        <span>{Math.round(item.confidence * 100)}% confidence</span>
         {item.last_confirmed_by && <span>Confirmed by {item.last_confirmed_by}</span>}
       </div>
     </li>
   );
 }
+
 function humanize(value: string) {
   return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

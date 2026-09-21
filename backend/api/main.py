@@ -167,7 +167,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
     @app.get("/healthz")
     def health() -> dict[str, str]:
-        return {"status": "ok", "service": "classall-api"}
+        return {"status": "ok", "service": "shipverify-api"}
 
     @app.post("/api/ingest/runs", dependencies=[Depends(require_ingest_key)])
     def create_run(expected: int | None = None) -> dict[str, Any]:
@@ -739,7 +739,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             updated = draft_category_response(
                 runtime,
                 case_id,
-                custom_instructions=request.custom_instructions,
+                custom_instructions=request.custom_instructions or request.response_text,
+                response_text=request.response_text,
                 reviewer=reviewer_id,
                 expected_version=request.expected_version,
             )

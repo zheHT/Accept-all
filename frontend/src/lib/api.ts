@@ -164,21 +164,24 @@ export interface CaseDetail extends CaseSummary {
   field_reviews?: Record<string, FieldReview>;
   review_history?: FieldReview[];
   si_artifact?: SIArtifactMetadata | null;
-  draft: {
-    state: string;
-    subject: string;
-    body: string;
-    content_hash: string;
-    delivery_mode?: "live" | "compose" | null;
-    origin?: "ai" | "template" | null;
-    gmail_url?: string | null;
-    has_live_gmail?: boolean;
-    attachments?: string[];
-    prepared_at?: string | null;
-    sent_at?: string | null;
-    sent_by?: string | null;
-  } | null;
+  draft: CaseDraft | null;
 }
+
+export interface CaseDraft {
+  state: string;
+  subject: string;
+  body: string;
+  content_hash: string;
+  delivery_mode?: "live" | "compose" | null;
+  origin?: "ai" | "template" | null;
+  gmail_url?: string | null;
+  has_live_gmail?: boolean;
+  attachments?: string[];
+  prepared_at?: string | null;
+  sent_at?: string | null;
+  sent_by?: string | null;
+}
+
 export interface FieldReview {
   field: string;
   decision: "confirm" | "correct" | "unreadable";
@@ -275,11 +278,11 @@ export const getDocumentDownload = (caseId: string, documentId: string) =>
 
 /** Fetch the source bytes with the configured auth token (signed file:// URLs are not reliable in-browser). */
 export interface DocumentContent {
-  blob: Blob;
+  blob: File;
   pages: number | null;
 }
 
-export async function getDocumentContent(caseId: string, documentId: string, signal?: AbortSignal): Promise<DocumentContent> {
+export async function getDocumentContent(caseId: string, documentId: string, filename: string, signal?: AbortSignal): Promise<DocumentContent> {
   const path = `/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}/content`;
   const request = async (forceRefresh: boolean) => {
     const token = await tokenProvider(forceRefresh);
@@ -307,7 +310,11 @@ export async function getDocumentContent(caseId: string, documentId: string, sig
     throw new ApiError(message, response.status);
   }
   const pageHeader = Number(response.headers.get("X-Document-Page-Count"));
-  return { blob: await response.blob(), pages: Number.isFinite(pageHeader) && pageHeader > 0 ? pageHeader : null };
+  const blob = await response.blob();
+  return {
+    blob: new File([blob], filename, { type: blob.type }),
+    pages: Number.isFinite(pageHeader) && pageHeader > 0 ? pageHeader : null,
+  };
 }
 
 export const reviewField = (
@@ -373,10 +380,19 @@ export const routeCase = (caseId: string, team: string, expectedVersion?: number
     body: JSON.stringify({ team, expected_version: expectedVersion }),
   });
 
-export const draftCategoryResponse = (caseId: string, responseText: string, expectedVersion?: number) =>
+export const draftCategoryResponse = (
+  caseId: string,
+  responseText: string = "",
+  expectedVersion?: number,
+  customInstructions?: string,
+) =>
   apiFetch<CaseDetail>(`/api/cases/${encodeURIComponent(caseId)}/actions/draft-response`, {
     method: "POST",
-    body: JSON.stringify({ response_text: responseText, expected_version: expectedVersion }),
+    body: JSON.stringify({
+      custom_instructions: customInstructions ?? responseText,
+      response_text: responseText,
+      expected_version: expectedVersion ?? 0,
+    }),
   });
 
 export const completeCategoryCase = (caseId: string, expectedVersion?: number, resolutionNote?: string) =>

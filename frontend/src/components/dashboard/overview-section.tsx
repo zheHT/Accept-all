@@ -1,10 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
+import {
+  ArrowDownOutlined,
+  ArrowUpOutlined,
+  ReloadOutlined,
+} from "@ant-design/icons";
+import { Button, Card, Progress, Segmented, Skeleton, Statistic } from "antd";
 import { cn } from "@/lib/cn";
-import { PeriodMenu } from "@/components/ui/period-menu";
-import { ErrorState, LoadingState, StaleNotice } from "@/components/ui/live-state";
+import { ErrorState, StaleNotice } from "@/components/ui/live-state";
 import { DonutChart } from "./donut-chart";
 import { PERIOD_ORDER, outcomeSlices, type Period } from "@/lib/dashboard-data";
 import { getDashboard } from "@/lib/api";
@@ -13,19 +17,11 @@ import { useLiveQuery } from "@/lib/use-live-query";
 import { STATUS_META } from "@/lib/status";
 import { readParam, writeParam } from "@/lib/url-state";
 
-/**
- * Single overview chart.
- *
- * One donut carries the whole verification picture: hovering a slice or a legend
- * row swaps the centre figure. Supporting numbers sit next to it as plain
- * figures rather than a second chart.
- */
 export function OverviewSection() {
   const [period, setPeriod] = useState<Period>("week");
   const [activeSlice, setActiveSlice] = useState<number | null>(null);
   const query = useLiveQuery((signal) => getDashboard(period, signal), [period]);
 
-  /** `?period=day|week|month` makes the selected range shareable. */
   useEffect(() => {
     const requested = readParam("period");
     if (requested && PERIOD_ORDER.includes(requested as Period)) {
@@ -39,7 +35,15 @@ export function OverviewSection() {
     writeParam("period", next === "week" ? null : next);
   };
 
-  if (query.loading && !query.data) return <LoadingState label="Loading overview metrics" />;
+  if (query.loading && !query.data) {
+    return (
+      <section className="flex flex-col gap-4">
+        <Card className="shadow-sm border-edge bg-surface/80" styles={{ body: { padding: "28px" } }}>
+          <Skeleton active paragraph={{ rows: 4 }} />
+        </Card>
+      </section>
+    );
+  }
   if (query.error && !query.data) {
     return <ErrorState message={query.error} retry={() => void query.refresh()} />;
   }
@@ -52,28 +56,35 @@ export function OverviewSection() {
       {query.stale && <StaleNotice />}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="eyebrow">Overview</p>
-          <p className="mt-1.5 text-[13px] text-ink-500">
+          <h2 className="text-[17px] font-semibold tracking-tight text-ink-900">Overview</h2>
+          <p className="mt-1 text-[13px] text-ink-500">
             {data.caption} · <span className="text-ink-400">{data.rangeLabel}</span>
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
+          <Button
+            type="default"
+            size="middle"
+            icon={<ReloadOutlined className={cn(query.loading && "animate-spin")} />}
             onClick={() => void query.refresh()}
             disabled={query.loading}
-            aria-label="Refresh overview metrics"
-            title="Refresh overview metrics"
-            className="btn-glass px-3 py-1.5 text-[12px] active:scale-95"
           >
-            <RefreshCw className={cn("size-3.5", query.loading && "animate-spin")} />
             Refresh
-          </button>
-          <PeriodMenu value={period} onChange={changePeriod} />
+          </Button>
+
+          <Segmented
+            value={period}
+            options={[
+              { label: "Day", value: "day" },
+              { label: "Week", value: "week" },
+              { label: "Month", value: "month" },
+            ]}
+            onChange={(val) => changePeriod(val as Period)}
+          />
         </div>
       </div>
 
-      <article className="glass glass-sheen p-6 lg:p-8">
+      <Card className="shadow-sm border-edge bg-surface/80 backdrop-blur" styles={{ body: { padding: "24px 32px" } }}>
         <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:gap-12">
           <div className="shrink-0 lg:w-[300px]">
             <DonutChart
@@ -111,8 +122,8 @@ export function OverviewSection() {
                       onFocus={() => setActiveSlice(index)}
                       onBlur={() => setActiveSlice(null)}
                       className={cn(
-                        "flex w-full items-center gap-4 rounded-lg px-2 py-3.5 text-left transition-colors",
-                        activeSlice === index ? "bg-surface/80" : "hover:bg-surface/60",
+                        "flex w-full items-center gap-4 rounded-lg px-2 py-3 text-left transition-colors cursor-pointer",
+                        activeSlice === index ? "bg-surface/90 shadow-sm" : "hover:bg-surface/60",
                       )}
                     >
                       <span className={cn("size-2.5 shrink-0 rounded-full", meta.dot)} />
@@ -125,12 +136,20 @@ export function OverviewSection() {
                         </span>
                       </span>
                       <span className="hidden w-32 shrink-0 sm:block">
-                        <span className="block h-1.5 overflow-hidden rounded-full bg-surface/80 ring-1 ring-inset ring-line">
-                          <span
-                            className={cn("block h-full rounded-full", meta.bar)}
-                            style={{ width: `${share}%` }}
-                          />
-                        </span>
+                        <Progress
+                          percent={share}
+                          showInfo={false}
+                          size="small"
+                          strokeColor={
+                            slice.status === "matched"
+                              ? "#52c41a"
+                              : slice.status === "mismatch"
+                                ? "#ff4d4f"
+                                : slice.status === "needs_review"
+                                  ? "#faad14"
+                                  : "#1677ff"
+                          }
+                        />
                       </span>
                       <span className="w-20 shrink-0 text-right">
                         <span className="tabular block text-[16px] font-semibold leading-none text-ink-900">
@@ -146,32 +165,27 @@ export function OverviewSection() {
               })}
             </ul>
 
-            <dl className="grid grid-cols-3 divide-x divide-line">
-              <Stat label="Total cases" value={String(data.total)} />
-              <Stat label="Avg. turnaround" value={data.avgTurnaround} />
-              <Stat label="Auto-cleared" value={`${data.autoCleared}%`} />
-            </dl>
+            <div className="grid grid-cols-3 divide-x divide-line pt-2">
+              <div className="px-4 first:pl-0">
+                <Statistic title="Total cases" value={data.total} />
+              </div>
+              <div className="px-4">
+                <Statistic title="Avg. turnaround" value={data.avgTurnaround} />
+              </div>
+              <div className="px-4 last:pr-0">
+                <Statistic title="Auto-cleared" value={data.autoCleared} suffix="%" />
+              </div>
+            </div>
           </div>
         </div>
-      </article>
+      </Card>
     </section>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="px-4 first:pl-0 last:pr-0">
-      <dt className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-400">{label}</dt>
-      <dd className="tabular mt-1.5 text-[20px] font-semibold leading-none tracking-tight text-ink-900">
-        {value}
-      </dd>
-    </div>
   );
 }
 
 function DeltaChip({ value, period }: { value: number; period: Period }) {
   const positive = value >= 0;
-  const Icon = positive ? TrendingUp : TrendingDown;
+  const Icon = positive ? ArrowUpOutlined : ArrowDownOutlined;
   const previous = period === "day" ? "yesterday" : `last ${period}`;
 
   return (
@@ -183,7 +197,7 @@ function DeltaChip({ value, period }: { value: number; period: Period }) {
           : "bg-failed-50/85 text-failed-700 ring-failed-200",
       )}
     >
-      <Icon className="size-3.5" strokeWidth={2.5} />
+      <Icon className="text-xs" />
       <span className="tabular">
         {positive ? "+" : ""}
         {value}%

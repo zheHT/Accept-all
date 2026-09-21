@@ -430,6 +430,7 @@ def draft_category_response(
     runtime: Any,
     case_id: str,
     custom_instructions: str = "",
+    response_text: str = "",
     reviewer: str = "reviewer",
     chat_id: str | None = None,
     expected_version: int | None = None,
@@ -442,7 +443,16 @@ def draft_category_response(
         raise Conflict("Case version conflict; please refresh")
 
     category = case.get("category") or (case.get("result") or {}).get("category")
-    if category == EmailCategory.INVOICE_QUERY.value:
+    original_subject = case.get("subject") or "General Inquiry"
+    subject = (
+        original_subject
+        if original_subject.lower().startswith("re:")
+        else f"Re: {original_subject}"
+    )
+
+    if response_text and len(response_text.strip()) > 5:
+        body = response_text.strip()
+    elif category == EmailCategory.INVOICE_QUERY.value:
         subject, body = generate_invoice_response_draft(case, custom_instructions)
     elif category == EmailCategory.GENERAL.value:
         subject, body = generate_general_response_draft(case, custom_instructions)

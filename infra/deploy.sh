@@ -208,6 +208,10 @@ if gcloud secrets versions list telegram-bot-token --project "$PROJECT_ID" --fil
         -d "$COMMANDS_JSON")
     printf '%s' "$COMMANDS_RESPONSE" | "$PYTHON_BIN" -c 'import json, sys; result = json.load(sys.stdin); sys.exit(0 if result.get("ok") is True else "Telegram command registration failed")'
 
+    curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TOKEN}/setMyName" \
+        -H "Content-Type: application/json" \
+        -d '{"name":"ShipVerify"}' >/dev/null
+
     curl -s -X POST "https://api.telegram.org/bot${TOKEN}/setMyDescription" \
         -H "Content-Type: application/json" \
         -d '{"description":"ShipVerify is an intelligent maritime shipping document triage and reconciliation agent. Upload Shipping Instructions (SI) and draft Bills of Lading (BL) to automatically detect discrepancies across 7 verified fields, review alerts, and coordinate email responses."}' >/dev/null
@@ -232,9 +236,9 @@ export NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="${AUTH_DOMAIN:-${PROJECT_ID}.firebaseap
 export NEXT_PUBLIC_FIREBASE_PROJECT_ID="${PROJ_ID:-$PROJECT_ID}"
 export NEXT_PUBLIC_FIREBASE_APP_ID="$APP_ID"
 
-if [ ! -d "frontend/node_modules" ]; then
-    npm ci --prefix frontend
-fi
+# Always restore the exact locked dependency set. An existing node_modules
+# directory can be stale after package.json/package-lock.json changes.
+npm ci --prefix frontend
 npm run build --prefix frontend
 run_firebase deploy --project "$PROJECT_ID" --only hosting,firestore:rules,firestore:indexes
 

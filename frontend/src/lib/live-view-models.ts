@@ -241,6 +241,7 @@ export function inboxDetail(item: CaseDetail): InboxEmail {
     attachments: files,
     classificationNote: item.rationale || inboxSummary(item).classificationNote,
     siArtifact: item.si_artifact,
+    draft: item.draft,
   };
 }
 

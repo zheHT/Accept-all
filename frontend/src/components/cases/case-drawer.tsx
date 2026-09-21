@@ -1,19 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ArrowRight,
-  CheckCircle2,
-  ScanSearch,
-  ExternalLink,
-  FileText,
-  Mail,
-  RefreshCw,
-  ScanLine,
-  TriangleAlert,
-  X,
-} from "lucide-react";
+  ArrowRightOutlined,
+  CheckCircleFilled,
+  CloseCircleFilled,
+  ExclamationCircleFilled,
+  FileSearchOutlined,
+  FileTextOutlined,
+  MailOutlined,
+  ReloadOutlined,
+  ScanOutlined,
+  WarningFilled,
+} from "@ant-design/icons";
+import { Button, Card, Drawer, Progress, Table, Tag, type TableColumnsType } from "antd";
 import { cn } from "@/lib/cn";
 import { StatusChip } from "@/components/status-chip";
 import { DocumentComparison } from "@/components/ui/document-comparison";
@@ -22,43 +23,16 @@ import { reviewDetail } from "@/lib/live-view-models";
 import type { ReviewCase } from "@/lib/review-data";
 import { DocumentPreview, type PreviewDocument } from "@/components/ui/document-preview";
 import { useToast } from "@/components/ui/toast";
-import { REQUIRED_FIELDS, type FieldResult, type VerificationCase } from "@/lib/case-data";
+import { REQUIRED_FIELDS, type FieldComparison, type FieldResult, type VerificationCase } from "@/lib/case-data";
 
-const RESULT_STYLE: Record<FieldResult, { label: string; chip: string; row: string }> = {
-  match: {
-    label: "Match",
-    chip: "bg-matched-50 text-matched-700 ring-matched-200",
-    row: "",
-  },
-  mismatch: {
-    label: "Mismatch",
-    chip: "bg-mismatch-50 text-mismatch-700 ring-mismatch-200",
-    row: "bg-mismatch-50/60",
-  },
-  uncertain: {
-    label: "Uncertain",
-    chip: "bg-review-50 text-review-700 ring-review-200",
-    row: "bg-review-50/60",
-  },
-  missing: {
-    label: "Missing",
-    chip: "bg-failed-50 text-failed-700 ring-failed-200",
-    row: "bg-failed-50/50",
-  },
-  pending: {
-    label: "Pending",
-    chip: "bg-processing-50 text-processing-700 ring-processing-200",
-    row: "",
-  },
+const FIELD_RESULT_TAG: Record<FieldResult, { color: string; label: string }> = {
+  match: { color: "success", label: "Match" },
+  mismatch: { color: "error", label: "Mismatch" },
+  uncertain: { color: "warning", label: "Uncertain" },
+  missing: { color: "volcano", label: "Missing" },
+  pending: { color: "processing", label: "Pending" },
 };
 
-/**
- * Verification case detail: the discrepancy report for one shipment.
- *
- * The verdict is stated first, then the evidence (source email and documents),
- * then the field-by-field comparison. No action is ever taken automatically —
- * approving a draft B/L stays a human decision.
- */
 export function CaseDrawer({
   verificationCase,
   onClose,
@@ -75,32 +49,21 @@ export function CaseDrawer({
   const [comparisonLoading, setComparisonLoading] = useState(false);
 
   const openComparison = async () => {
+    if (!verificationCase) return;
     setComparisonLoading(true);
     try {
-      const detail = await getCase(item.id);
+      const detail = await getCase(verificationCase.id);
       setComparisonCase(reviewDetail(detail));
     } catch (error) {
-      toast({ title: "Document comparison is unavailable", description: error instanceof Error ? error.message : "Please retry.", tone: "warning" });
+      toast({
+        title: "Document comparison is unavailable",
+        description: error instanceof Error ? error.message : "Please retry.",
+        tone: "warning",
+      });
     } finally {
       setComparisonLoading(false);
     }
   };
-
-  useEffect(() => {
-    if (!verificationCase) return;
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previous;
-    };
-  }, [verificationCase, onClose]);
 
   if (!verificationCase) return null;
 
@@ -110,70 +73,136 @@ export function CaseDrawer({
     (field) => field.result === "uncertain" || field.result === "missing",
   );
 
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <button
-        type="button"
-        aria-label="Close case detail"
-        onClick={onClose}
-        className="absolute inset-0 animate-[fade-in_0.2s_ease-out] bg-overlay backdrop-blur-sm"
-      />
+  const fieldColumns: TableColumnsType<FieldComparison> = [
+    {
+      title: "FIELD",
+      dataIndex: "field",
+      key: "field",
+      width: 170,
+      render: (text: string, record: FieldComparison) => (
+        <div>
+          <span className="font-semibold text-xs text-ink-900">{text}</span>
+          {record.note && (
+            <span className="block text-[11px] text-ink-400 mt-0.5 leading-tight">{record.note}</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: "SHIPPING INSTRUCTION",
+      dataIndex: "si",
+      key: "si",
+      render: (val?: string | null) => (
+        <span className="text-xs text-ink-700">{val ?? <span className="text-ink-300">—</span>}</span>
+      ),
+    },
+    {
+      title: "BILL OF LADING",
+      dataIndex: "bl",
+      key: "bl",
+      render: (val?: string | null, record?: FieldComparison) => {
+        const isMismatch = record?.result === "mismatch";
+        const isUncertain = record?.result === "uncertain";
+        if (!val) return <span className="text-ink-300">—</span>;
+        return (
+          <span
+            className={cn(
+              "inline-block text-xs rounded px-1.5 py-0.5",
+              isMismatch
+                ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300 font-medium"
+                : isUncertain
+                  ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 font-medium"
+                  : "text-ink-700",
+            )}
+          >
+            {val}
+          </span>
+        );
+      },
+    },
+    {
+      title: "RESULT",
+      dataIndex: "result",
+      key: "result",
+      align: "right",
+      width: 100,
+      render: (val: FieldResult) => {
+        const meta = FIELD_RESULT_TAG[val];
+        return <Tag color={meta.color}>{meta.label}</Tag>;
+      },
+    },
+  ];
 
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Verification case ${item.caseId}`}
-        className="relative flex h-full w-full max-w-[760px] animate-[drawer-in_0.28s_cubic-bezier(0.22,1,0.36,1)] flex-col border-l border-edge bg-surface/95 shadow-glass-lg backdrop-blur-2xl backdrop-saturate-150"
-      >
-        <header className="flex items-start gap-4 border-b border-line px-6 py-5">
-          <div className="min-w-0 flex-1">
+  return (
+    <>
+      <Drawer
+        open={Boolean(verificationCase)}
+        onClose={onClose}
+        size={780}
+        title={
+          <div className="flex flex-col gap-1 py-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono text-[12px] font-semibold text-ink-400">
-                {item.caseId}
-              </span>
+              <span className="font-mono text-xs font-semibold text-ink-400">{item.caseId}</span>
               <StatusChip status={item.result} />
               {item.documents.bl?.scanned && (
-                <span className="inline-flex items-center gap-1 rounded-md bg-review-50 px-1.5 py-0.5 text-[10.5px] font-medium text-review-700 ring-1 ring-inset ring-review-200">
-                  <ScanLine className="size-3" strokeWidth={2.25} />
+                <Tag color="warning" icon={<ScanOutlined />}>
                   Scanned B/L
-                </span>
+                </Tag>
               )}
             </div>
-            <h2 className="mt-2 text-[20px] font-semibold leading-snug tracking-tight text-ink-900">
-              {item.shipment}
-            </h2>
-            <p className="mt-1 text-[12.5px] text-ink-400">
+            <h2 className="text-lg font-bold text-ink-900 tracking-tight">{item.shipment}</h2>
+            <p className="text-xs text-ink-400">
               {item.carrierRef ? `Carrier reference ${item.carrierRef} · ` : ""}
               Updated {item.updated.toLowerCase()}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="grid size-9 shrink-0 place-items-center rounded-xl text-ink-400 transition-colors hover:bg-surface hover:text-ink-900"
-          >
-            <X className="size-4.5" strokeWidth={2} />
-          </button>
-        </header>
+        }
+        footer={
+          <div className="flex items-center justify-between py-1">
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={() => onRetry(item.id)}
+            >
+              Reprocess Case
+            </Button>
+            {item.result === "needs_review" ? (
+              <Button
+                type="primary"
+                icon={<ArrowRightOutlined />}
+                onClick={() => {
+                  onClose();
+                  router.push(`/review?case=${item.id}`);
+                }}
+              >
+                Go to Review Queue
+              </Button>
+            ) : (
+              <Button type="default" onClick={onClose} className="min-w-[96px]">
+                Close
+              </Button>
+            )}
+          </div>
+        }
+      >
+        <div className="flex flex-col gap-6">
+          {/* Verdict Card */}
+          <VerdictCard item={item} mismatchCount={mismatches.length} unresolvedCount={unresolved.length} />
 
-        <div className="flex-1 overflow-y-auto px-6 py-6">
-          <Verdict item={item} mismatchCount={mismatches.length} unresolvedCount={unresolved.length} />
+          {/* Source & Docs */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Card size="small" title={<span className="text-xs font-semibold text-ink-700">Source Email</span>} className="border-edge bg-surface/70">
+              <div className="flex flex-col gap-1 text-xs">
+                <div className="flex items-start gap-1.5 font-medium text-ink-900">
+                  <MailOutlined className="text-ink-400 mt-0.5" />
+                  <span>{item.sourceEmailSubject}</span>
+                </div>
+                <div className="text-ink-500 pl-5">{item.sourceEmailSender}</div>
+                <div className="text-ink-400 pl-5 text-[11px]">{item.sourceEmailReceived}</div>
+              </div>
+            </Card>
 
-          <section className="mt-5 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-edge bg-surface/60 p-4">
-              <p className="eyebrow">Source email</p>
-              <p className="mt-2 flex items-start gap-2 text-[13px] font-medium text-ink-900">
-                <Mail className="mt-0.5 size-3.5 shrink-0 text-ink-400" strokeWidth={2} />
-                {item.sourceEmailSubject}
-              </p>
-              <p className="mt-1.5 text-[12px] text-ink-500">{item.sourceEmailSender}</p>
-              <p className="mt-0.5 text-[11.5px] text-ink-400">{item.sourceEmailReceived}</p>
-            </div>
-
-            <div className="rounded-xl border border-edge bg-surface/60 p-4">
-              <p className="eyebrow">Documents</p>
-              <div className="mt-2 flex flex-col gap-2">
+            <Card size="small" title={<span className="text-xs font-semibold text-ink-700">Documents</span>} className="border-edge bg-surface/70">
+              <div className="flex flex-col gap-2">
                 {(["SI", "BL"] as const).map((role) => {
                   const file = role === "SI" ? item.documents.si : item.documents.bl;
                   if (!file) return null;
@@ -182,302 +211,159 @@ export function CaseDrawer({
                       key={role}
                       type="button"
                       onClick={() => void openComparison()}
-                      className="flex items-center gap-2.5 rounded-lg border border-line bg-surface/80 px-2.5 py-2 text-left transition-colors hover:border-brand-200 hover:bg-surface"
+                      className="flex items-center gap-2 rounded-lg border border-line bg-surface/80 px-2.5 py-1.5 text-left text-xs transition-colors hover:border-brand-300 hover:bg-surface"
                     >
-                      <span className="rounded bg-gradient-to-b from-brand-500 to-brand-700 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-white">
+                      <Tag color="blue" className="font-mono text-[10px] m-0">
                         {role}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink-700">
-                        {file.name}
-                      </span>
-                      <ExternalLink className="size-3.5 shrink-0 text-ink-400" strokeWidth={2} />
+                      </Tag>
+                      <span className="flex-1 truncate font-medium text-ink-700">{file.name}</span>
+                      <FileTextOutlined className="text-ink-400 text-xs" />
                     </button>
                   );
                 })}
               </div>
-            </div>
-            <button type="button" onClick={() => void openComparison()} disabled={comparisonLoading} className="btn-glass mt-3 w-full justify-center text-[12px]">
-              <ScanSearch className="size-3.5" strokeWidth={2.25} />
-              {comparisonLoading ? "Loading documents…" : "Compare source documents (SI vs BL)"}
-            </button>
-          </section>
+            </Card>
+          </div>
 
-          <section className="mt-6">
-            <div className="flex items-end justify-between gap-3">
+          <Button
+            type="dashed"
+            block
+            icon={<FileSearchOutlined />}
+            loading={comparisonLoading}
+            onClick={() => void openComparison()}
+          >
+            Compare Source Documents (SI vs BL)
+          </Button>
+
+          {/* Field-by-Field Comparison Table */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
               <div>
-                <p className="eyebrow">Field-by-field comparison</p>
-                <p className="mt-1.5 text-[12.5px] text-ink-500">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-ink-400">
+                  Field-by-field comparison
+                </h4>
+                <p className="text-xs text-ink-500 mt-0.5">
                   {item.fieldsChecked === null
                     ? "No fields could be compared"
                     : `${item.fieldsChecked} of ${REQUIRED_FIELDS.length} required fields checked`}
                 </p>
               </div>
               {item.confidence > 0 && (
-                <span className="tabular rounded-full bg-surface/80 px-2.5 py-1 text-[11px] font-medium text-ink-500 ring-1 ring-inset ring-line">
-                  Extraction confidence {Math.round(item.confidence * 100)}%
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-ink-400">Confidence:</span>
+                  <Progress
+                    percent={Math.round(item.confidence * 100)}
+                    size="small"
+                    className="w-24"
+                  />
+                </div>
               )}
             </div>
 
-            <div className="mt-3 overflow-hidden rounded-xl border border-line">
-              <table className="w-full border-separate border-spacing-0 text-left">
-                <thead className="bg-surface/70">
-                  <tr className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-ink-400">
-                    <th scope="col" className="px-4 py-2.5 font-semibold">
-                      Field
-                    </th>
-                    <th scope="col" className="px-4 py-2.5 font-semibold">
-                      Shipping Instruction
-                    </th>
-                    <th scope="col" className="px-4 py-2.5 font-semibold">
-                      Bill of Lading
-                    </th>
-                    <th scope="col" className="px-4 py-2.5 text-right font-semibold">
-                      Result
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {item.fields.map((field) => {
-                    const style = RESULT_STYLE[field.result];
-                    return (
-                      <tr key={field.field} className={style.row}>
-                        <td className="border-t border-line px-4 py-3 align-top">
-                          <span className="text-[12.5px] font-medium text-ink-900">
-                            {field.field}
-                          </span>
-                          {field.note && (
-                            <span className="mt-1 block max-w-[180px] text-[11px] leading-relaxed text-ink-400">
-                              {field.note}
-                            </span>
-                          )}
-                        </td>
-                        <td className="border-t border-line px-4 py-3 align-top text-[12.5px] text-ink-700">
-                          {field.si ?? <span className="text-ink-300">—</span>}
-                        </td>
-                        <td
-                          className={cn(
-                            "border-t border-line px-4 py-3 align-top text-[12.5px]",
-                            field.result === "mismatch"
-                              ? "font-semibold text-mismatch-700"
-                              : "text-ink-700",
-                          )}
-                        >
-                          {field.bl ?? (
-                            <span className="text-ink-300">
-                              {field.result === "pending" ? "extracting…" : "not readable"}
-                            </span>
-                          )}
-                        </td>
-                        <td className="border-t border-line px-4 py-3 text-right align-top">
-                          <span
-                            className={cn(
-                              "inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset",
-                              style.chip,
-                            )}
-                          >
-                            {style.label}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className="mt-6 rounded-xl border border-edge bg-surface/55 p-4">
-            <p className="eyebrow">How this case was produced</p>
-            <ol className="mt-3 flex flex-wrap items-center gap-1.5">
-              {[
-                "Incoming email",
-                "AI classification",
-                "SI + BL extraction",
-                "7-field normalization",
-                "Validation",
-              ].map((step) => (
-                <li key={step} className="flex items-center gap-1.5">
-                  <span className="rounded-lg bg-brand-50 px-2 py-1.5 text-[11px] font-medium text-brand-700 ring-1 ring-inset ring-brand-200">
-                    {step}
-                  </span>
-                  <ArrowRight className="size-3 text-ink-300" strokeWidth={2.5} />
-                </li>
-              ))}
-              <li>
-                <StatusChip status={item.result} />
-              </li>
-            </ol>
-          </section>
-        </div>
-
-        <footer className="flex items-center justify-between gap-3 border-t border-line bg-surface/60 px-6 py-4">
-          <span className="text-[12px] text-ink-400">
-            The system never approves or edits a document on its own.
-          </span>
-          <div className="flex items-center gap-2">
-            <button type="button" className="btn-glass" onClick={onClose}>
-              Close
-            </button>
-            {item.result === "failed" && (
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => {
-                  onRetry(item.id);
-                  onClose();
-                }}
-              >
-                <RefreshCw className="size-4" strokeWidth={2.25} />
-                Retry processing
-              </button>
-            )}
-            {item.result === "needs_review" && (
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => router.push(`/review?case=${item.id}`)}
-              >
-                Open human review
-                <ArrowRight className="size-4" strokeWidth={2.25} />
-              </button>
-            )}
-            {item.result === "mismatch" && (
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() =>
-                  toast({
-                    title: "Correction request drafted",
-                    description: `A carrier email listing the ${mismatches.length} discrepancy field(s) on ${item.shipment} is ready in your outbox for review.`,
-                    tone: "warning",
-                  })
-                }
-              >
-                Draft correction request
-                <ArrowRight className="size-4" strokeWidth={2.25} />
-              </button>
-            )}
-            {item.result === "matched" && (
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() =>
-                  toast({
-                    title: `${item.shipment} approval recorded`,
-                    description: "Your approval of the draft B/L was logged against this case.",
-                    tone: "success",
-                  })
-                }
-              >
-                <CheckCircle2 className="size-4" strokeWidth={2.25} />
-                Approve draft B/L
-              </button>
-            )}
+            <Table<FieldComparison>
+              rowKey="field"
+              size="small"
+              columns={fieldColumns}
+              dataSource={item.fields}
+              pagination={false}
+              bordered
+            />
           </div>
-        </footer>
-      </section>
+        </div>
+      </Drawer>
 
-      <DocumentPreview document={preview} onClose={() => setPreview(null)} />
+      {/* Embedded Document Comparison Modal */}
       {comparisonCase && (
         <DocumentComparison
           si={comparisonCase.si}
           bl={comparisonCase.bl}
           problemField={comparisonCase.problemField}
-          open
+          open={Boolean(comparisonCase)}
           onClose={() => setComparisonCase(null)}
-          heading={`Document comparison · ${item.caseId}`}
+          heading={`${item.shipment} · ${comparisonCase.problemField}`}
         />
       )}
-    </div>
+
+      {/* Document Preview */}
+      {preview && (
+        <DocumentPreview document={preview} onClose={() => setPreview(null)} />
+      )}
+    </>
   );
 }
 
-function Verdict({
+function VerdictCard({
   item,
   mismatchCount,
-  unresolvedCount,
+  unresolvedCount = 0,
 }: {
   item: VerificationCase;
   mismatchCount: number;
-  unresolvedCount: number;
+  unresolvedCount?: number;
 }) {
-  const shared = "rounded-xl border p-4 flex items-start gap-3";
-
   if (item.result === "matched") {
     return (
-      <div className={cn(shared, "border-matched-200 bg-matched-50/70")}>
-        <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-matched-700" strokeWidth={2.25} />
-        <div>
-          <p className="text-[14px] font-semibold text-matched-700">No mismatch detected</p>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-700">
-            All {REQUIRED_FIELDS.length} required fields match between the shipping instruction and
-            the draft Bill of Lading.
-          </p>
+      <Card size="small" className="border-matched-200 bg-matched-50/70">
+        <div className="flex items-start gap-3">
+          <CheckCircleFilled className="text-xl text-matched-500 mt-0.5" />
+          <div>
+            <h3 className="text-sm font-semibold text-matched-700">Documents Match</h3>
+            <p className="text-xs text-ink-700 mt-1 leading-relaxed">
+              All checked fields in the draft Bill of Lading match the customer&apos;s Shipping Instructions.
+            </p>
+          </div>
         </div>
-      </div>
+      </Card>
     );
   }
 
   if (item.result === "mismatch") {
     return (
-      <div className={cn(shared, "border-mismatch-200 bg-mismatch-50/70")}>
-        <TriangleAlert className="mt-0.5 size-5 shrink-0 text-mismatch-700" strokeWidth={2.25} />
-        <div>
-          <p className="text-[14px] font-semibold text-mismatch-700">
-            {mismatchCount} discrepanc{mismatchCount === 1 ? "y" : "ies"} detected
-          </p>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-700">{item.issueContext}</p>
+      <Card size="small" className="border-mismatch-200 bg-mismatch-50/70">
+        <div className="flex items-start gap-3">
+          <CloseCircleFilled className="text-xl text-mismatch-500 mt-0.5" />
+          <div>
+            <h3 className="text-sm font-semibold text-mismatch-700">
+              Discrepancies Detected ({mismatchCount})
+            </h3>
+            <p className="text-xs text-ink-700 mt-1 leading-relaxed">
+              {item.issue ?? "Differences found between Shipping Instructions and draft Bill of Lading."}
+            </p>
+          </div>
         </div>
-      </div>
+      </Card>
     );
   }
 
   if (item.result === "needs_review") {
     return (
-      <div className={cn(shared, "border-review-200 bg-review-50/70")}>
-        <TriangleAlert className="mt-0.5 size-5 shrink-0 text-review-700" strokeWidth={2.25} />
-        <div>
-          <p className="text-[14px] font-semibold text-review-700">
-            Human review required — {unresolvedCount} field
-            {unresolvedCount === 1 ? "" : "s"} unresolved
-          </p>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-700">{item.issueContext}</p>
+      <Card size="small" className="border-review-200 bg-review-50/70">
+        <div className="flex items-start gap-3">
+          <ExclamationCircleFilled className="text-xl text-review-500 mt-0.5" />
+          <div>
+            <h3 className="text-sm font-semibold text-review-700">
+              Human Review Required {unresolvedCount > 0 ? `(${unresolvedCount})` : ""}
+            </h3>
+            <p className="text-xs text-ink-700 mt-1 leading-relaxed">
+              {item.issue ?? "Automated verification flagged ambiguous fields that require specialist verification."}
+            </p>
+          </div>
         </div>
-      </div>
-    );
-  }
-
-  if (item.result === "processing") {
-    return (
-      <div className={cn(shared, "border-processing-200 bg-processing-50/70")}>
-        <RefreshCw
-          className="mt-0.5 size-5 shrink-0 animate-spin text-processing-700"
-          strokeWidth={2.25}
-        />
-        <div>
-          <p className="text-[14px] font-semibold text-processing-700">
-            Extraction in progress — {item.fieldsChecked} of {REQUIRED_FIELDS.length} fields
-          </p>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-700">{item.issueContext}</p>
-        </div>
-      </div>
+      </Card>
     );
   }
 
   return (
-    <div className={cn(shared, "border-failed-200 bg-failed-50/70")}>
-      <TriangleAlert className="mt-0.5 size-5 shrink-0 text-failed-700" strokeWidth={2.25} />
-      <div>
-        <p className="text-[14px] font-semibold text-failed-700">
-          Processing failed — {item.issue}
-        </p>
-        <p className="mt-1 text-[12.5px] leading-relaxed text-ink-700">{item.issueContext}</p>
-        <p className="mt-2 flex items-center gap-1.5 text-[12px] font-medium text-ink-500">
-          <FileText className="size-3.5" strokeWidth={2} />
-          Retry after the sender supplies a machine-readable document.
-        </p>
+    <Card size="small" className="border-failed-200 bg-failed-50/70">
+      <div className="flex items-start gap-3">
+        <WarningFilled className="text-xl text-failed-500 mt-0.5" />
+        <div>
+          <h3 className="text-sm font-semibold text-failed-700">Processing Failed</h3>
+          <p className="text-xs text-ink-700 mt-1 leading-relaxed">
+            {item.issue ?? "The verification engine encountered an unrecoverable extraction fault."}
+          </p>
+        </div>
       </div>
-    </div>
+    </Card>
   );
 }

@@ -47,7 +47,7 @@ export function StatBar({
             aria-pressed={active}
             onClick={() => onSelect(segment.id)}
             className={cn(
-              "group relative flex flex-col border-line px-5 pb-4 pt-4 text-left transition-colors duration-200",
+              "group relative flex flex-col border-line px-5 pb-4 pt-4 text-left transition-colors duration-200 cursor-pointer",
               index > 0 && "lg:border-l",
               index % 2 === 1 && "border-l lg:border-l",
               index >= 2 && "border-t lg:border-t-0",
